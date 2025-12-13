@@ -150,8 +150,11 @@ class AcademicStrategy(BaseStrategy):
         1. If a sentence is split across Row A and Row B:
            - MERGE them into a single coherent sentence in the Target.
            - Place the FULL translated sentence in Row A's Target.
-           - STRICTLY leave Row B's Target as an empty string ("").
-        2. ROW COUNT INVARIANCE:
+           - Row B's Target MUST contain a placeholder: "[已向上合并]" (Merged into previous row).
+        2. If Row A needs to be merged with Row B below:
+           - Place the FULL translated sentence in Row B's Target.
+           - Row A's Target MUST contain a placeholder: "[已向下合并]" (Merged into next row).
+        3. ROW COUNT INVARIANCE:
            - You MUST return exactly the same number of rows as input.
         """
         
