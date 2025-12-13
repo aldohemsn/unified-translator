@@ -1,3 +1,7 @@
+"""
+Video Translation Strategy
+Implements Transcription Audit, Style Guide generation, and VO/OS separation.
+"""
 import json
 import logging
 from typing import List, Dict, Any, Optional
@@ -16,32 +20,40 @@ class VideoStrategy(BaseStrategy):
 
     def setup(self, input_file_path: str, context_files: Dict[str, str] = None) -> None:
         """
-        Generate Style Guide from transcript if possible.
+        Generate Detailed Style Guide (VO vs OS, Tone).
         """
         if self.config.get('strategies', {}).get('video', {}).get('generate_style_guide', True):
             handler = TSVHandler()
             try:
                 rows = handler.read_file(input_file_path)
                 if rows:
-                    transcript_snippet = " ".join([r.get('Source', '') for r in rows[:200]]) # First 200 lines
+                    # Larger snippet for video context
+                    transcript_snippet = " ".join([r.get('Source', '') for r in rows[:300]]) 
                     llm = LLMClient(self.config)
-                    self._generate_style_guide(llm, transcript_snippet)
+                    self._generate_detailed_style_guide(llm, transcript_snippet)
             except Exception as e:
                 logger.warning(f"Style guide generation failed: {e}")
 
-    def _generate_style_guide(self, llm: LLMClient, text: str):
+    def _generate_detailed_style_guide(self, llm: LLMClient, text: str):
         prompt = f"""
-        Analyze the following video transcript snippet.
-        Generate a Style Guide (Tone, VO vs OS rules).
+        You are a Senior Localization Architect for Video Content.
+        Task: Create a "Best Efficient Style Guide".
         
-        Text:
-        {text}
+        Sections Required:
+        1. **Project Context**: Topic, Vibe (e.g., Casual YouTube vs. Formal Doc).
+        2. **Stylistic Protocols**:
+           - **Voice-Over (VO)**: Guidelines for spoken narrative (fluidity, breath).
+           - **On-Screen Text (OS)**: Guidelines for titles/labels (conciseness, nominal style).
+        3. **Formatting**: Rules for numbers, punctuation in subtitles.
+        
+        Source Text Snippet:
+        {text[:5000]}
         """
         try:
             val = llm.generate(prompt)
             if val:
                 self.style_guide = val
-            logger.info("Style Guide validated.")
+            logger.info("✓ Video Style Guide generated.")
         except Exception:
             pass
 
@@ -62,31 +74,42 @@ class VideoStrategy(BaseStrategy):
                 'Chinese': r.get('Target', '')
             })
             
-        # Prepare History (last 5 processed rows)
         history_snippet = "None"
         if history_rows:
              history_snippet = json.dumps([{
                  'English': r.get('Source'),
-                 'Chinese_Proofread': r.get('Target')
+                 'Chinese': r.get('Target')
              } for r in history_rows[-5:]], indent=2)
+
+        # Translationese Blacklist
+        blacklist_instruction = """
+        **NEGATIVE CONSTRAINTS (Translationese Blacklist)**:
+        - Do NOT use "进行" (conduct) as a dummy verb.
+        - Do NOT use "通过" (via/through) for 'by'.
+        - Do NOT use "旨在" (aim to).
+        - Avoid "它" (it) unless referring to a specific physical object.
+        """
 
         prompt = f"""
         [STYLE GUIDE]
         {self.style_guide}
         
+        {blacklist_instruction}
+        
         [PREVIOUS CONTEXT]
         {history_snippet}
         
-        TASK:
-        1. Proofread the 'Chinese' translation against 'English' source.
-        2. AUDIT the 'English' source for ASR/Transcription errors (e.g. "Elan Musk" -> "Elon Musk").
-           - If a Transcription Error is found, prepend "⚠️ [TRANSCRIPTION FLAG]" to the 'Comments' field.
-        3. Output JSON Array.
+        [TASK]
+        1. **Transcription Audit**: Check 'English' source for typos, ASR errors (homophones), or wrong names.
+           - Protocol: If error found, PREPEND "⚠️ [TRANSCRIPTION FLAG]: <Note>" to 'Comments'.
+        2. **Translation**:
+           - Determine if segment is VO (Spoken) or OS (Text).
+           - Apply appropriate style (VO=Fluid, OS=Concise).
         
-        INPUT DATA:
+        [INPUT DATA]
         {json.dumps(formatted_batch, indent=2)}
         
-        OUTPUT FORMAT:
+        [OUTPUT FORMAT]
         JSON Array of {{ "ID": "...", "Chinese_Proofread": "...", "Comments": "..." }}
         """
         
@@ -104,10 +127,13 @@ class VideoStrategy(BaseStrategy):
                 row_id = row['ID']
                 res = result_map.get(row_id, {})
                 
-                # Combine original target if proofread missing? No, replace.
                 new_target = res.get('Chinese_Proofread', row.get('Target', ''))
                 comments = res.get('Comments', '')
                 
+                # Append to existing comments if any
+                if row.get('Comments'):
+                    comments = f"{row.get('Comments')} | {comments}" if comments else row.get('Comments')
+
                 output.append({
                     'ID': row_id,
                     'Source': row['Source'],
@@ -118,5 +144,4 @@ class VideoStrategy(BaseStrategy):
 
         except Exception as e:
             logger.error(f"Video batch processing failed: {e}")
-            # Return original with error note
             return [{**r, 'Comments': f"Error: {e}"} for r in batch_rows]

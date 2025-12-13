@@ -1,3 +1,7 @@
+"""
+Legal Translation Strategy
+Implements CIL (Context-Insight-Logic) methodology for legal translation.
+"""
 import csv
 import logging
 import os
@@ -9,44 +13,49 @@ from ..core.context_window import ContextWindowBuilder
 
 logger = logging.getLogger(__name__)
 
+
 class LegalStrategy(BaseStrategy):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self.name = "LegalStrategy"
-        self.glossary = {}
-        self.context_note = "Legal Translation Context (General)"
+        self.glossary: Dict[str, str] = {}
+        
+        # CIL Knowledge Context
+        self.context_note = ""      # Context: Topic, Tone, Audience
+        self.domain_insights = ""   # Insight: Domain Analysis + Key Terms + Pitfalls
+        self.layman_logic = ""      # Logic: Feynman-style explanation
 
     def setup(self, input_file_path: str, context_files: Dict[str, str] = None) -> None:
         """
-        Load glossary and set context.
+        Load glossary and generate CIL context using LLM.
         """
+        # 1. Load Glossary
         if context_files and 'glossary' in context_files:
             glossary_path = context_files['glossary']
             self._load_glossary(glossary_path)
             
-        # TODO: Implement optional LLM-based context generation (CIL) here if needed
-        # For now, we rely on the generic context or arguments
+        # 2. Generate CIL Context (if source file provided or use input)
+        source_path = context_files.get('source', input_file_path) if context_files else input_file_path
+        self._generate_cil_context(source_path)
 
     def _load_glossary(self, path: str):
+        """Load TSV glossary file."""
         if not os.path.exists(path):
             logger.warning(f"Glossary file not found: {path}")
             return
 
         try:
             with open(path, 'r', encoding='utf-8') as f:
-                # Detect header
-                f_start = f.read(1024)
-                f.seek(0)
-                sniffer = csv.Sniffer()
-                has_header = sniffer.has_header(f_start)
-                
                 reader = csv.reader(f, delimiter='\t')
-                if has_header:
-                     # Skip header if it looks like one, or just treat first row as data if it's Term/Translation
-                     # A simple heuristic: if row[0].lower() == 'english' or 'term', skip
-                     first_row = next(reader, None)
-                     if first_row and first_row[0].lower() not in ['english', 'term', 'source']:
-                         self.glossary[first_row[0].strip()] = first_row[1].strip()
+                header = next(reader, None)
+                
+                # Simple header detection
+                if header and header[0].lower() in ['english', 'term', 'source', 'en']:
+                    pass  # Header skipped
+                else:
+                    # Treat as data if not clearly a header
+                    if header and len(header) >= 2:
+                        self.glossary[header[0].strip()] = header[1].strip()
                 
                 for row in reader:
                     if len(row) >= 2:
@@ -56,14 +65,109 @@ class LegalStrategy(BaseStrategy):
         except Exception as e:
             logger.error(f"Error loading glossary: {e}")
 
-    def _build_glossary_prompt(self) -> str:
-        if not self.glossary:
-            return "No mandatory glossary provided."
+    def _generate_cil_context(self, file_path: str):
+        """
+        Generate CIL (Context-Insight-Logic) knowledge using LLM.
+        """
+        logger.info("Generating CIL knowledge context...")
         
-        lines = ["MANDATORY GLOSSARY (ABSOLUTE REQUIREMENT):"]
-        for k, v in self.glossary.items():
-            lines.append(f"- {k} -> {v}")
-        return "\n".join(lines)
+        try:
+            from ..core.tsv_handler import TSVHandler
+            handler = TSVHandler()
+            rows = handler.read_file(file_path)
+            if not rows:
+                return
+            
+            # Simple assumption: Source texts are in 'Source' column
+            source_texts = [r.get('Source', '') for r in rows[:100]] 
+            full_text = ' '.join(source_texts)[:5000]
+        except Exception as e:
+            logger.warning(f"Could not read file for CIL: {e}")
+            return
+        
+        if not full_text:
+            return
+        
+        knowledge_model = self.config.get('strategies', {}).get('legal', {}).get(
+            'cil_model', 
+            self.config.get('llm', {}).get('knowledge_model', 'gemini-2.5-pro')
+        )
+        
+        try:
+            llm = LLMClient(self.config)
+            
+            # 1. CONTEXT
+            context_prompt = f"""Analyze the following legal text.
+Identify: Core topic, Document type, Intended audience, General tone.
+Summarize in one concise paragraph (under 100 words).
+
+Text:
+"{full_text[:3000]}"
+"""
+            self.context_note = llm.generate(context_prompt, model=knowledge_model).strip()
+            logger.info("✓ Context generated")
+            
+            # 2. INSIGHT
+            insight_prompt = f"""ROLE: Senior Legal Analyst.
+TASK: Passage Insight.
+GLOBAL CONTEXT: "{self.context_note}"
+
+1. Identify specific micro-domain (e.g. "HK IP Litigation").
+2. Define 3-5 Key Terms.
+3. Flag "False Friends" or pitfalls.
+
+OUTPUT:
+- Domain Context: ...
+- Key Definitions: ...
+- Pitfalls: ...
+
+TEXT:
+"{full_text[:3000]}"
+"""
+            self.domain_insights = llm.generate(insight_prompt, model=knowledge_model).strip()
+            logger.info("✓ Insight generated")
+            
+            # 3. LOGIC
+            logic_prompt = f"""ROLE: "Layman in the Loop" (Feynman Technique).
+CONTEXT: {self.context_note[:500]}
+
+1. Explain what this text *means* to an outsider.
+2. Extract the LOGIC. No word-for-word translation.
+3. Explain in the OPPOSITE language of the source.
+
+TEXT:
+"{full_text[:3000]}"
+"""
+            self.layman_logic = llm.generate(logic_prompt, model=knowledge_model, temperature=0.7).strip()
+            logger.info("✓ Layman's Logic generated")
+            
+        except Exception as e:
+            logger.error(f"CIL generation failed: {e}")
+            self.context_note = "Legal Translation Context (General)"
+
+    def _build_cil_prompt(self) -> str:
+        """Build the full CIL prompt section."""
+        glossary_lines = [f"- {k} -> {v}" for k, v in self.glossary.items()]
+        glossary_text = "\n".join(glossary_lines) if glossary_lines else "(No glossary provided)"
+        
+        return f"""=== CIL TRANSLATION METHODOLOGY ===
+
+【1. CONTEXT - Document Background】
+{self.context_note or "(Not available)"}
+
+【2. INSIGHT - Domain Analysis】
+{self.domain_insights or "(See glossary below)"}
+
+【2.5 MANDATORY GLOSSARY】
+The following terminology MUST be used EXACTLY as specified.
+DO NOT use any alternative translations. This is NON-NEGOTIABLE.
+
+{glossary_text}
+
+【3. LAYMAN'S LOGIC - Feynman Explanation】
+{self.layman_logic or "(Not available)"}
+
+=== END CIL ==="""
 
     def _enforce_glossary(self, source: str, target: str) -> str:
         """
@@ -72,14 +176,12 @@ class LegalStrategy(BaseStrategy):
         violations = []
         for term_en, term_cn in self.glossary.items():
             if term_en in source:
-                # Handle alternatives separated by /
                 options = [opt.strip() for opt in term_cn.split('/')]
                 if not any(opt in target for opt in options):
-                    # Flag violation
                     violations.append(f"{term_en} should be {term_cn}")
         
         if violations:
-            target += f" [[GLOSSARY VIOLATION: {'; '.join(violations)}]]"
+            target += f" [[GLOSSARY_VIOLATION: {'; '.join(violations)}]]"
         
         return target
 
@@ -90,88 +192,110 @@ class LegalStrategy(BaseStrategy):
         history_rows: List[Dict[str, str]],
         window_builder: ContextWindowBuilder
     ) -> List[Dict[str, str]]:
-        
-        # We process legal texts often row-by-row for precision, 
-        # or in small batches. The CIL prompt is heavy.
-        # Let's use a batch prompt but ask for individual handling.
-        
-        processed_batch = []
-        glossary_text = self._build_glossary_prompt()
-        
-        # NOTE: For Legal, we construct a prompt PER ROW effectively if we use context window effectively 
-        # in a sliding manner. But `process_batch` implies we want to send multiple rows to the LLM.
-        # In the original `legal-translation-cil`, it was sliding window per row (or small groups).
-        # Let's stick to the prompt structure which processes the batch.
-        
-        # Prepare Batch Data for Prompt
-        batch_input_str = json.dumps([{k: v for k,v in r.items() if k in ['ID', 'Source', 'Target']} for r in batch_rows], indent=2)
-        
-        prompt = f"""
-        You are a legal translation expert specializing in Hong Kong law.
-        
-        CONTEXT NOTE: {self.context_note}
-        
-        {glossary_text}
-        
-        TASK:
-        Review and refine the following translations.
-        
-        REQUIREMENTS:
-        1. STRICTLY follow the Glossary. If source has a glossary term, target MUST use the defined Chinese translation.
-        2. Maintain Format: Output must be a stable JSON array.
-        3. Logic: Ensure legal precision and logical flow.
-        
-        INPUT DATA:
-        {batch_input_str}
-        
-        OUTPUT FORMAT:
-        JSON Array of objects: {{ "ID": "...", "Source": "...", "Target": "..." }}
         """
+        Process using sliding window PER ROW (legal precision mode).
+        Use ContextWindowBuilder properly.
+        """
+        processed_batch = []
+        cil_prompt = self._build_cil_prompt()
+        
+        system_prompt = f"""You are a legal translation expert specializing in Hong Kong law.
 
-        response_schema = {
-            "type": "ARRAY",
-            "items": {
-                "type": "OBJECT",
-                "properties": {
-                    "ID": {"type": "STRING"},
-                    "Source": {"type": "STRING"},
-                    "Target": {"type": "STRING"}
-                },
-                "required": ["ID", "Source", "Target"]
-            }
-        }
+{cil_prompt}
 
-        try:
-            response_text = llm_client.generate(
-                prompt, 
-                system_instruction="You are a legal translator engine. Output strictly valid JSON.",
-                response_schema=response_schema,
-                response_mime_type="application/json"
-            )
+【Task】
+Review the Target translation for the marked segment.
+1. Check Glossary compliance first.
+2. Ensure logic flow (Logic).
+3. Ensure context coherence (Context).
+4. Fix grammar/punctuation.
+
+【CRITICAL WARNING】
+If you use a translation different from the Glossary, your output will be REJECTED.
+
+【Output Format】
+Return ONLY the corrected Target text. If no changes, return original.
+"""
+        
+        # We need ALL history + current batch available for the window builder
+        # 'history_rows' contains previously processed rows (all prior batches)
+        # 'processed_batch' contains previously processed rows in THIS batch
+        
+        # But wait, 'window_builder' was initialized with ALL raw data in 'Processor.run'.
+        # However, for the BEST context, we should ideally show the *corrected* versions of previous rows.
+        # The 'window_builder' passed from Processor typically holds raw rows.
+        # Let's see if we can use 'history_rows' to patch the window dynamically or 
+        # build a local window if strict sequential dependency is needed.
+        
+        # For simplicity and standard compliance with Processor, we use the passed 'window_builder' 
+        # to get the SURROUNDING context (which might look at raw future rows, and raw past rows).
+        # IMPROVEMENT: If we want to show *corrected* past rows, we'd need to update the window builder's data 
+        # or construct windows manually here. Given `window_builder.build(index)` works on indices relative to total data.
+        
+        # We need to know the GLOBAL index of the current row to query the window builder.
+        # This is strictly tricky if we don't pass global indices.
+        # Let's Assume batch_rows have 'ID' which *might* map to index if numeric, but safest is to rely on passed objects.
+        
+        # Workaround: Recalculate global index? 
+        # Actually Processor calls process_batch. 
+        # Let's rely on standard sliding window textual construction manually if needed, 
+        # OR assume we just use the local batch context if global is hard.
+        
+        # BETTER APPROACH matching `legal-translation-cil`:
+        # Reconstruct window locally using history + batch.
+        
+        full_context_data = history_rows + batch_rows # Use raw for current batch initially
+        history_len = len(history_rows)
+        
+        for i, row in enumerate(batch_rows):
+            source = row.get('Source', '')
+            target = row.get('Target', '')
             
-            results = json.loads(response_text)
+            if not source.strip():
+                processed_batch.append(row)
+                continue
             
-            # Post-process and Enforce Glossary
-            # Create a map for quick lookup
-            result_map = {r.get('ID'): r.get('Target', '') for r in results}
+            # Consturct window locally
+            # Before: last 3 from (history + processed_so_far)
+            # After: next 2 from (rest of batch)
             
-            for row in batch_rows:
-                row_id = row['ID']
-                original_target = row['Target']
-                new_target = result_map.get(row_id, original_target)
-                
-                # Enforce
-                final_target = self._enforce_glossary(row['Source'], new_target)
+            current_processed_so_far = processed_batch 
+            available_past = history_rows + current_processed_so_far
+            
+            # Build window string manually for clarity and precision
+            window_parts = []
+            
+            # Past 3
+            start_past = max(0, len(available_past) - 3)
+            for p_row in available_past[start_past:]:
+                window_parts.append(f"[Segment {p_row.get('ID')}]: {p_row.get('Source')} -> {p_row.get('Target')}")
+            
+            # Current
+            window_parts.append(f">>> [Segment {row.get('ID')} - TARGET]:\n    Source: {source}\n    Target: {target}")
+            
+            # Future 2 (from remaining batch_rows)
+            for f_row in batch_rows[i+1 : i+3]:
+                 window_parts.append(f"[Segment {f_row.get('ID')}]: {f_row.get('Source')}...")
+            
+            context_window_str = "\n".join(window_parts)
+            
+            prompt = f"""【Context Window】
+{context_window_str}
+
+Please review and correct the Target for the marked segment."""
+
+            try:
+                corrected = llm_client.generate(prompt, system_instruction=system_prompt).strip()
+                corrected = corrected.replace("，，", "，")
+                corrected = self._enforce_glossary(source, corrected)
                 
                 processed_batch.append({
-                    'ID': row_id,
-                    'Source': row['Source'],
-                    'Target': final_target
+                    'ID': row['ID'],
+                    'Source': source,
+                    'Target': corrected
                 })
+            except Exception as e:
+                logger.warning(f"Row {row.get('ID')} error: {e}")
+                processed_batch.append(row)
                 
-        except Exception as e:
-            logger.error(f"Batch processing failed: {e}")
-            # Fallback: return original
-            return batch_rows
-
         return processed_batch
