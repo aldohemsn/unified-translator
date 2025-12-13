@@ -227,7 +227,7 @@ class AcademicStrategy(BaseStrategy):
                 'Revision': proc.get('Target')
             })
             
-        prompt = f\"\"\"
+        prompt = f"""
         TASK: QA Check for CRITICAL translation errors ONLY. Identify:
         1. Omissions: SIGNIFICANT source information is COMPLETELY missing (not rephrased) in Revision.
         2. Misinterpretations: FACTUAL meaning is DIRECTLY contradicted (not stylistic rewording).
@@ -247,7 +247,7 @@ class AcademicStrategy(BaseStrategy):
         {json.dumps(qa_input, indent=2, ensure_ascii=False)}
         
         OUTPUT FORMAT (JSON):
-        Array of objects: {{ \"ID\": \"...\", \"Issue\": \"Description of issue or 'PASS'\" }}
+        Array of objects: {{ "ID": "...", "Issue": "Description of issue or 'PASS'" }}
         Only include items with CRITICAL issues. If no critical issues, return empty array [].
         """
         
