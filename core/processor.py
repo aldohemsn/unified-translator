@@ -39,43 +39,64 @@ class Processor:
         
         processed_rows = []
         
-        # 3. Batch Loop
-        total_batches = math.ceil(len(raw_rows) / self.batch_size)
-        
-        for i in range(0, len(raw_rows), self.batch_size):
-            batch_num = (i // self.batch_size) + 1
-            batch = raw_rows[i : i + self.batch_size]
+        # 3. Batch Loop - Check if strategy provides custom batch boundaries
+        if hasattr(strategy, 'get_batch_boundaries') and callable(strategy.get_batch_boundaries):
+            batch_boundaries = strategy.get_batch_boundaries(len(raw_rows))
+            total_batches = len(batch_boundaries)
             
-            logger.info(f"Processing Batch {batch_num}/{total_batches} ({len(batch)} rows)...")
+            for batch_num, (start, end) in enumerate(batch_boundaries, 1):
+                batch = raw_rows[start:end]
+                
+                logger.info(f"Processing Batch {batch_num}/{total_batches} ({len(batch)} rows, lines {start+1}-{end})...")
+                
+                try:
+                    results = strategy.process_batch(
+                        self.llm_client, 
+                        batch, 
+                        processed_rows, 
+                        window_builder
+                    )
+                    
+                    if len(results) != len(batch):
+                        logger.error(f"Row count mismatch in batch {batch_num}. Using fallback.")
+                        results = batch
+                    
+                    processed_rows.extend(results)
+                    
+                except Exception as e:
+                    logger.error(f"Batch {batch_num} failed: {e}")
+                    processed_rows.extend(batch)
+                
+                time.sleep(0.5)
+        else:
+            # Original fixed batch_size loop
+            total_batches = math.ceil(len(raw_rows) / self.batch_size)
             
-            try:
-                # Call Strategy
-                # Using processed_rows as history
-                results = strategy.process_batch(
-                    self.llm_client, 
-                    batch, 
-                    processed_rows, 
-                    window_builder
-                )
+            for i in range(0, len(raw_rows), self.batch_size):
+                batch_num = (i // self.batch_size) + 1
+                batch = raw_rows[i : i + self.batch_size]
                 
-                # Verify Row Invariance
-                if len(results) != len(batch):
-                    logger.error(f"Row count mismatch in batch {batch_num}. Expected {len(batch)}, got {len(results)}. Using fallback.")
-                    # Fill missing or truncate? 
-                    # Ideally strategy handles this, but if not, we must preserve alignment.
-                    # Fallback: append original batch if mismatch
-                    results = batch
+                logger.info(f"Processing Batch {batch_num}/{total_batches} ({len(batch)} rows)...")
                 
-                processed_rows.extend(results)
+                try:
+                    results = strategy.process_batch(
+                        self.llm_client, 
+                        batch, 
+                        processed_rows, 
+                        window_builder
+                    )
+                    
+                    if len(results) != len(batch):
+                        logger.error(f"Row count mismatch in batch {batch_num}. Using fallback.")
+                        results = batch
+                    
+                    processed_rows.extend(results)
+                    
+                except Exception as e:
+                    logger.error(f"Batch {batch_num} failed: {e}")
+                    processed_rows.extend(batch)
                 
-                # Optional: Autosave / Streaming write could go here
-                
-            except Exception as e:
-                logger.error(f"Batch {batch_num} failed completely: {e}")
-                processed_rows.extend(batch) # Fallback to original
-            
-            # Rate limit / Politeness
-            time.sleep(0.5)
+                time.sleep(0.5)
 
         # 4. Write Output
         logger.info(f"Writing results to {output_path}")

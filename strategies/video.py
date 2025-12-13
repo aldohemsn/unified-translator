@@ -22,7 +22,7 @@ class VideoStrategy(BaseStrategy):
 
     def setup(self, input_file_path: str, context_files: Dict[str, str] = None) -> None:
         """
-        Generate Detailed Style Guide and Store Global Transcript Context.
+        Generate Compressed Context Summary and Detailed Style Guide.
         """
         handler = TSVHandler()
         try:
@@ -30,11 +30,10 @@ class VideoStrategy(BaseStrategy):
             if not rows:
                 return
 
-            # 1. Store Global Context (if enabled in config)
+            # 1. Generate Compressed Context (replaces raw transcript storage)
             if self.should_inject_full_context():
-                max_chars = self.get_full_context_max_chars()
-                self.transcript_context = " ".join([r.get('Source', '') for r in rows[:500]])[:max_chars]
-                logger.info(f"✓ Global transcript context stored ({len(self.transcript_context)} chars)")
+                full_text = " ".join([r.get('Source', '') for r in rows[:500]])
+                self._generate_compressed_context(full_text)
             
             # 2. Generate Style Guide
             if self._strategy_config.get('generate_style_guide', True):
@@ -44,6 +43,43 @@ class VideoStrategy(BaseStrategy):
 
         except Exception as e:
             logger.warning(f"Video Setup failed: {e}")
+    
+    def _generate_compressed_context(self, full_text: str) -> None:
+        """
+        Compress full transcript into structured summary.
+        Reduces token usage from ~3000 to ~500 while preserving key context.
+        """
+        logger.info("Generating compressed context summary...")
+        
+        try:
+            llm = LLMClient(self.config)
+            
+            compress_prompt = f"""为以下视频字幕生成【场景摘要】，用于指导翻译。
+
+请包含：
+1. **主题**: 视频在讲什么（一句话）
+2. **说话人**: 有哪些角色/身份（如：主持人、嘉宾A、旁白）
+3. **语境**: 正式/口语，新闻/教程/剧情/采访
+4. **关键术语**: 专有名词、人名、品牌名（列出 5-10 个）
+5. **特殊注意**: 任何翻译时需要注意的点
+
+字幕原文（前 5000 字符）：
+{full_text[:5000]}
+
+输出格式（中文，控制在 500 字以内）：
+"""
+            
+            response = llm.generate(compress_prompt)
+            if response:
+                self.transcript_context = response.strip()
+                logger.info(f"✓ Compressed context generated ({len(self.transcript_context)} chars, down from {len(full_text[:self.get_full_context_max_chars()])})")
+            else:
+                # Fallback to truncated raw text
+                self.transcript_context = full_text[:1000]
+                
+        except Exception as e:
+            logger.warning(f"Context compression failed: {e}. Using truncated raw text.")
+            self.transcript_context = full_text[:1000]
 
     def _generate_detailed_style_guide(self, llm: LLMClient, text: str):
         prompt = f"""
@@ -108,8 +144,8 @@ class VideoStrategy(BaseStrategy):
         
         {blacklist_instruction}
         
-        [GLOBAL TRANSCRIPT CONTEXT (Topic Overview)]
-        {self.transcript_context[:2000]}... (Truncated)
+        [SCENE SUMMARY (Compressed Context)]
+        {self.transcript_context}
         
         [PREVIOUS CONTEXT]
         {history_snippet}

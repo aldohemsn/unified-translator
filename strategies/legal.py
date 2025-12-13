@@ -26,10 +26,13 @@ class LegalStrategy(BaseStrategy):
         self.context_note = ""      # Context: Topic, Tone, Audience
         self.domain_insights = ""   # Insight: Domain Analysis + Key Terms + Pitfalls
         self.layman_logic = ""      # Logic: Feynman-style explanation
+        
+        # Semantic Segments (for optimized batching)
+        self.semantic_segments: List[Dict[str, int]] = []  # [{"start": 0, "end": 5}, ...]
 
     def setup(self, input_file_path: str, context_files: Dict[str, str] = None) -> None:
         """
-        Load glossary and generate CIL context using LLM.
+        Load glossary, generate CIL context, and perform semantic segmentation.
         """
         # 1. Load Glossary
         if context_files and 'glossary' in context_files:
@@ -39,6 +42,82 @@ class LegalStrategy(BaseStrategy):
         # 2. Generate CIL Context (if source file provided or use input)
         source_path = context_files.get('source', input_file_path) if context_files else input_file_path
         self._generate_cil_context(source_path)
+        
+        # 3. Perform Semantic Segmentation
+        self._generate_semantic_segments(source_path)
+    
+    def _generate_semantic_segments(self, file_path: str) -> None:
+        """
+        Use LLM to divide document into semantic segments (complete legal arguments).
+        Each segment becomes a processing batch instead of fixed batch_size=1.
+        """
+        logger.info("Generating semantic segments...")
+        
+        try:
+            handler = TSVHandler()
+            rows = handler.read_file(file_path)
+            if not rows or len(rows) < 2:
+                self.semantic_segments = []
+                return
+            
+            # Prepare numbered lines for LLM
+            numbered_lines = []
+            for i, row in enumerate(rows[:200]):  # Limit to first 200 rows for efficiency
+                source = row.get('Source', '')[:100]  # Truncate long lines
+                numbered_lines.append(f"{i}: {source}")
+            
+            lines_text = "\n".join(numbered_lines)
+            
+            llm = LLMClient(self.config)
+            
+            segment_prompt = f"""分析以下法律文本，按【语义段】划分。
+
+一个语义段是一个完整的法律论点、事实陈述或程序说明。
+每段应包含 2-8 行（不超过8行）。
+
+输入格式：
+行号: 内容摘要
+
+{lines_text}
+
+输出格式 (JSON数组):
+[{{"start": 0, "end": 3}}, {{"start": 4, "end": 7}}, ...]
+
+注意：
+- start 和 end 都是行号（0-indexed）
+- 每段的 end 是该段最后一行的行号
+- 覆盖所有行，不遗漏
+"""
+            
+            response = llm.generate(segment_prompt, response_mime_type="application/json")
+            segments = json.loads(response)
+            
+            # Validate segments
+            valid_segments = []
+            for seg in segments:
+                if isinstance(seg, dict) and 'start' in seg and 'end' in seg:
+                    valid_segments.append({
+                        "start": int(seg['start']),
+                        "end": int(seg['end'])
+                    })
+            
+            self.semantic_segments = valid_segments
+            logger.info(f"✓ Generated {len(self.semantic_segments)} semantic segments")
+            
+        except Exception as e:
+            logger.warning(f"Semantic segmentation failed: {e}. Using default batching.")
+            self.semantic_segments = []
+    
+    def get_batch_boundaries(self, total_rows: int) -> List[tuple]:
+        """
+        Return batch boundaries based on semantic segments.
+        Falls back to row-by-row if no segments available.
+        """
+        if self.semantic_segments:
+            return [(seg['start'], seg['end'] + 1) for seg in self.semantic_segments]
+        else:
+            # Fallback: row-by-row (original behavior)
+            return [(i, i + 1) for i in range(total_rows)]
 
     def _load_glossary(self, path: str):
         """Load TSV glossary file."""
