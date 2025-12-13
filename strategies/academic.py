@@ -1,6 +1,6 @@
 """
 Academic Translation Strategy
-Implements Dual-Persona (Translator + Editor) workflow with Cross-Row Merging.
+Implements Dual-Persona (Translator + Editor) workflow with Cross-Row Merging and QA Check.
 """
 import json
 import logging
@@ -102,15 +102,7 @@ class AcademicStrategy(BaseStrategy):
         window_builder: ContextWindowBuilder
     ) -> List[Dict[str, str]]:
         
-        # Two-Pass Workflow: 
-        # But for efficiency/integration with current Single-Pass loop (Processor),
-        # we can combine them into a powerful Single-Pass Prompt 
-        # OR run them internally here. 
-        # Given "Cross-Row Merging" requirement, Single-Pass with clear instructions is usually better 
-        # to avoid alignment hell between passes.
-        
-        # Let's effectively use the "Academic Editor" persona but feed it the "Literal" needs as constraints.
-        
+        # Prepare Batch JSON using 'Source_Text' to be agnostic
         batch_input = [{
             'ID': r.get('ID'),
             'Source': r.get('Source'),
@@ -119,6 +111,15 @@ class AcademicStrategy(BaseStrategy):
         
         term_text = "\n".join([f"- {t.get('term')}: {t.get('translation')}" for t in self.terms]) if self.terms else "None"
         
+        # Prepare Context History
+        history_snippet = "None"
+        if history_rows:
+            history_rows_data = history_rows[-8:] # Last 8 rows
+            history_snippet = json.dumps([{
+                'ID': r.get('ID'),
+                'Target': r.get('Target')
+            } for r in history_rows_data], indent=2, ensure_ascii=False)
+
         # Merge Protocol Instruction
         merge_protocol = """
         CRITICAL PROTOCOL: CROSS-ROW MERGING
@@ -134,9 +135,13 @@ class AcademicStrategy(BaseStrategy):
         [ROLES]
         Phase 1 (Internal): {self.persona_translator}
         Phase 2 (Output): {self.persona_editor}
+        *CRITICAL*: Phase 2 Editor must NOT look at the Source Language structure. Polish the English Draft into impeccable Chinese academic prose.
         
         [TERMINOLOGY]
         {term_text}
+        
+        [PREVIOUS CONTEXT (For Flow Continuity)]
+        {history_snippet}
         
         [TASK]
         Translate/Polish the 'Source' into academic Chinese ('Target').
@@ -173,8 +178,8 @@ class AcademicStrategy(BaseStrategy):
                     'Target': new_target
                 })
                 
-            # Optional: QA Check (Sampling or Batch)
-            # self.perform_qa(llm_client, processed)
+            # Perform QA Check
+            processed = self.perform_qa(llm_client, processed, batch_rows)
             
             return processed
             
@@ -182,9 +187,50 @@ class AcademicStrategy(BaseStrategy):
             logger.error(f"Batch processing failed: {e}")
             return batch_rows
 
-    def perform_qa(self, llm_client: LLMClient, processed_rows: List[Dict[str, str]]):
+    def perform_qa(self, llm_client: LLMClient, processed_rows: List[Dict[str, str]], original_rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
         """
-        Optional post-batch QA. currently a stub or can be called if needed.
+        Post-batch QA Check for Omissions, Misinterpretations, and Hallucinations.
         """
-        # Implementation for checking Omissions/Hallucinations
-        pass
+        qa_input = []
+        for orig, proc in zip(original_rows, processed_rows):
+            qa_input.append({
+                'ID': orig.get('ID'),
+                'Source': orig.get('Source'),
+                'Revision': proc.get('Target')
+            })
+            
+        prompt = f"""
+        TASK: QA Check. Identify:
+        1. Omissions (Source info missing in Revision).
+        2. Misinterpretations (Meaning contradicted).
+        3. Hallucinations (Added info not in Source).
+        
+        Ignore stylistic changes. Focus on FACTUAL errors.
+        
+        INPUT:
+        {json.dumps(qa_input, indent=2, ensure_ascii=False)}
+        
+        OUTPUT FORMAT (JSON):
+        Array of objects: {{ "ID": "...", "Issue": "Description of issue or 'PASS'" }}
+        Only include items with issues.
+        """
+        
+        try:
+            resp = llm_client.generate(prompt, response_mime_type="application/json")
+            issues = json.loads(resp)
+            
+            issue_map = {i.get('ID'): i.get('Issue') for i in issues if i.get('Issue') != 'PASS'}
+            
+            final_rows = []
+            for row in processed_rows:
+                rid = str(row.get('ID'))
+                if rid in issue_map:
+                    # Append QA Flag
+                    row['Target'] += f" [[QA FLAG: {issue_map[rid]}]]"
+                final_rows.append(row)
+                
+            return final_rows
+            
+        except Exception as e:
+            logger.warning(f"QA Check failed: {e}")
+            return processed_rows

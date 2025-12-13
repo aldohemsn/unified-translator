@@ -17,22 +17,31 @@ class VideoStrategy(BaseStrategy):
         super().__init__(config)
         self.name = "VideoStrategy"
         self.style_guide = "No specific style guide generated."
+        self.transcript_context = "" # Global context storage
 
     def setup(self, input_file_path: str, context_files: Dict[str, str] = None) -> None:
         """
-        Generate Detailed Style Guide (VO vs OS, Tone).
+        Generate Detailed Style Guide and Store Global Transcript Context.
         """
-        if self.config.get('strategies', {}).get('video', {}).get('generate_style_guide', True):
-            handler = TSVHandler()
-            try:
-                rows = handler.read_file(input_file_path)
-                if rows:
-                    # Larger snippet for video context
-                    transcript_snippet = " ".join([r.get('Source', '') for r in rows[:300]]) 
-                    llm = LLMClient(self.config)
-                    self._generate_detailed_style_guide(llm, transcript_snippet)
-            except Exception as e:
-                logger.warning(f"Style guide generation failed: {e}")
+        handler = TSVHandler()
+        try:
+            rows = handler.read_file(input_file_path)
+            if not rows:
+                return
+
+            # 1. Store Global Context (First 500 lines ~ 2-3k words usually sufficient for context)
+            # In a real full-doc flow, we might summarize this.
+            self.transcript_context = " ".join([r.get('Source', '') for r in rows[:500]])
+            
+            # 2. Generate Style Guide
+            if self.config.get('strategies', {}).get('video', {}).get('generate_style_guide', True):
+                llm = LLMClient(self.config)
+                # Use a representative snippet for style analysis
+                style_snippet = " ".join([r.get('Source', '') for r in rows[:200]])
+                self._generate_detailed_style_guide(llm, style_snippet)
+
+        except Exception as e:
+            logger.warning(f"Video Setup failed: {e}")
 
     def _generate_detailed_style_guide(self, llm: LLMClient, text: str):
         prompt = f"""
@@ -79,15 +88,16 @@ class VideoStrategy(BaseStrategy):
              history_snippet = json.dumps([{
                  'English': r.get('Source'),
                  'Chinese': r.get('Target')
-             } for r in history_rows[-5:]], indent=2)
+             } for r in history_rows[-5:]], indent=2, ensure_ascii=False)
 
-        # Translationese Blacklist
+        # Translationese Blacklist (Complete)
         blacklist_instruction = """
         **NEGATIVE CONSTRAINTS (Translationese Blacklist)**:
         - Do NOT use "进行" (conduct) as a dummy verb.
         - Do NOT use "通过" (via/through) for 'by'.
         - Do NOT use "旨在" (aim to).
         - Avoid "它" (it) unless referring to a specific physical object.
+        - Avoid "任何" (any) in affirmative sentences (use "所有" or omit).
         """
 
         prompt = f"""
@@ -95,6 +105,9 @@ class VideoStrategy(BaseStrategy):
         {self.style_guide}
         
         {blacklist_instruction}
+        
+        [GLOBAL TRANSCRIPT CONTEXT (Topic Overview)]
+        {self.transcript_context[:2000]}... (Truncated)
         
         [PREVIOUS CONTEXT]
         {history_snippet}
@@ -107,7 +120,7 @@ class VideoStrategy(BaseStrategy):
            - Apply appropriate style (VO=Fluid, OS=Concise).
         
         [INPUT DATA]
-        {json.dumps(formatted_batch, indent=2)}
+        {json.dumps(formatted_batch, indent=2, ensure_ascii=False)}
         
         [OUTPUT FORMAT]
         JSON Array of {{ "ID": "...", "Chinese_Proofread": "...", "Comments": "..." }}
