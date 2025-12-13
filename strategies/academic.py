@@ -54,11 +54,30 @@ class AcademicStrategy(BaseStrategy):
 
     def _generate_dual_personas(self, llm: LLMClient, text: str, model: str):
         prompt = f"""
-        Analyze the following academic text snippet (Field, Tone).
+        Analyze the provided text snippet from an academic paper.
         
-        Define TWO distinct personas:
-        1. "Literal Translator": Focuses on semantic precision, suppresses urge to polish.
-        2. "Academic Editor": Focuses on publication-level flow/register, blind to source typos.
+        Step 1: Analysis
+        Identify:
+        1. The Academic Field (e.g., Inorganic Chemistry, Marxist Philosophy).
+        2. The Register/Tone (e.g., highly technical, argumentative, descriptive).
+        3. The Target Audience.
+        4. The Author's Stance/Perspective.
+
+        Step 2: Define Personas
+        Based on the analysis, define TWO specific personas:
+
+        1. **Literal Translator Persona**
+           - Role: Transform Chinese text into an accurate, structurally faithful English draft.
+           - Context Integration: Explicitly state the **Academic Field** and **Author's Stance** (from Step 1) in this description so the translator understands the source context. Do NOT include Target Audience or Target Tone here.
+           - Key Directive: **Suppress any urge to polish, paraphrase, or improve flow.** Prioritize semantic precision and structural correspondence over idiomatic fluency. The goal is to create a transparent "semantic anchor" that reveals the original Chinese logic.
+           - Tone: Objective, precise, unembellished, almost robotic.
+           - Start with: "You are a specialized literal translator working on a paper in the field of [Insert Field] with a perspective of [Insert Stance]..."
+
+        2. **Academic Editor (Proofreader) Persona**
+           - Role: Refine the English draft for publication-level flow, clarity, and register.
+           - Tone: Authoritative, polished, idiomatic.
+           - Start with: "You are a senior editor..."
+           - Crucial: The description of this persona MUST focus exclusively on English academic editing standards and conventions, without making any inferences or references to the original source language (e.g., Chinese, Spanish, Japanese, etc.).
 
         OUTPUT FORMAT (JSON):
         {{
