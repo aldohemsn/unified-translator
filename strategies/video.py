@@ -6,9 +6,9 @@ import json
 import logging
 from typing import List, Dict, Any, Optional
 from .base_strategy import BaseStrategy
-from ..core.llm_client import LLMClient
-from ..core.context_window import ContextWindowBuilder
-from ..core.tsv_handler import TSVHandler
+from core.llm_client import LLMClient
+from core.context_window import ContextWindowBuilder
+from core.tsv_handler import TSVHandler
 
 logger = logging.getLogger(__name__)
 

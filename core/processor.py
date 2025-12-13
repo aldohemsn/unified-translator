@@ -2,10 +2,10 @@ import logging
 import math
 import time
 from typing import List, Dict, Any, Optional
+
 from .tsv_handler import TSVHandler
 from .llm_client import LLMClient
 from .context_window import ContextWindowBuilder
-from ..strategies.base_strategy import BaseStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +16,7 @@ class Processor:
         self.tsv_handler = TSVHandler()
         self.batch_size = config.get('processing', {}).get('batch_size', 15)
 
-    def run(self, input_path: str, output_path: str, strategy: BaseStrategy):
+    def run(self, input_path: str, output_path: str, strategy: 'Any'):
         """
         Main processing loop.
         """

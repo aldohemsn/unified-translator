@@ -6,8 +6,8 @@
 # =============================================================================
 llm:
   api_key_env_var: "GEMINI_API_KEY"
-  default_model: "gemini-2.5-flash"
-  knowledge_model: "gemini-2.5-pro"  # For pre-production analysis (CIL, Persona)
+  default_model: "gemini-2.5-flash-lite"
+  knowledge_model: "gemini-2.5-flash-lite"  # For pre-production analysis (CIL, Persona)
   max_retries: 5
   timeout: 60
 
@@ -42,7 +42,7 @@ strategies:
       enable_context: true
       enable_insight: true
       enable_logic: true  # Layman's Logic (Feynman) - important for legal
-      cil_model: "gemini-2.5-pro"
+      cil_model: "gemini-2.5-flash-lite"
     
     # Cross-Row Merging
     cross_row_merging: false  # DISABLED for legal precision
@@ -71,7 +71,7 @@ strategies:
     
     # Persona Generation
     enable_dual_persona: true
-    persona_model: "gemini-2.5-pro"
+    persona_model: "gemini-2.5-flash-lite"
     
     # Terminology Extraction
     extract_terms: true
@@ -104,7 +104,7 @@ strategies:
     
     # Style Guide Generation
     generate_style_guide: true
-    style_guide_model: "gemini-2.5-flash"
+    style_guide_model: "gemini-2.5-flash-lite"
     
     # Transcription Audit
     enable_transcription_audit: true

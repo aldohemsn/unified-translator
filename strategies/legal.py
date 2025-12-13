@@ -8,8 +8,9 @@ import os
 import json
 from typing import List, Dict, Any, Optional
 from .base_strategy import BaseStrategy
-from ..core.llm_client import LLMClient
-from ..core.context_window import ContextWindowBuilder
+from core.llm_client import LLMClient
+from core.context_window import ContextWindowBuilder
+from core.tsv_handler import TSVHandler
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,6 @@ class LegalStrategy(BaseStrategy):
         logger.info("Generating CIL knowledge context...")
         
         try:
-            from ..core.tsv_handler import TSVHandler
             handler = TSVHandler()
             rows = handler.read_file(file_path)
             if not rows:
@@ -218,7 +218,10 @@ Review the Target translation for the marked segment.
 If you use a translation different from the Glossary, your output will be REJECTED.
 
 【Output Format】
-Return ONLY the corrected Target text. If no changes, return original.
+CRITICAL: Return ONLY the corrected Target text. Do NOT include any analysis, explanation, reasoning, or commentary.
+Your response must be the translation ONLY - nothing else. If no changes needed, return original Target.
+Example of CORRECT output: 第一被告及第五被告须...
+Example of INCORRECT output: "Analysis: The source uses..." (REJECTED)
 """
         
         # We need ALL history + current batch available for the window builder

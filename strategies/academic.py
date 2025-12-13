@@ -6,9 +6,9 @@ import json
 import logging
 from typing import List, Dict, Any, Optional
 from .base_strategy import BaseStrategy
-from ..core.llm_client import LLMClient
-from ..core.context_window import ContextWindowBuilder
-from ..core.tsv_handler import TSVHandler
+from core.llm_client import LLMClient
+from core.context_window import ContextWindowBuilder
+from core.tsv_handler import TSVHandler
 
 logger = logging.getLogger(__name__)
 
@@ -227,20 +227,28 @@ class AcademicStrategy(BaseStrategy):
                 'Revision': proc.get('Target')
             })
             
-        prompt = f"""
-        TASK: QA Check. Identify:
-        1. Omissions (Source info missing in Revision).
-        2. Misinterpretations (Meaning contradicted).
-        3. Hallucinations (Added info not in Source).
+        prompt = f\"\"\"
+        TASK: QA Check for CRITICAL translation errors ONLY. Identify:
+        1. Omissions: SIGNIFICANT source information is COMPLETELY missing (not rephrased) in Revision.
+        2. Misinterpretations: FACTUAL meaning is DIRECTLY contradicted (not stylistic rewording).
+        3. Hallucinations: Substantial NEW information invented that has NO basis in Source.
         
-        Ignore stylistic changes. Focus on FACTUAL errors.
+        IMPORTANT - Do NOT flag as errors:
+        - Stylistic changes (word order, punctuation, formal/informal style)
+        - Minor rephrasing that preserves meaning
+        - Adding/removing articles, conjunctions, or transitional words
+        - Different but semantically equivalent translations
+        - Formatting changes (quotation marks, spacing)
+        - Author name transliteration differences (e.g., 派利夏恩 vs Pylyshyn)
+        
+        Focus ONLY on MAJOR FACTUAL errors that change the core meaning.
         
         INPUT:
         {json.dumps(qa_input, indent=2, ensure_ascii=False)}
         
         OUTPUT FORMAT (JSON):
-        Array of objects: {{ "ID": "...", "Issue": "Description of issue or 'PASS'" }}
-        Only include items with issues.
+        Array of objects: {{ \"ID\": \"...\", \"Issue\": \"Description of issue or 'PASS'\" }}
+        Only include items with CRITICAL issues. If no critical issues, return empty array [].
         """
         
         try:
