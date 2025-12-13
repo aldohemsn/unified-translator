@@ -18,6 +18,7 @@ class LegalStrategy(BaseStrategy):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self.name = "LegalStrategy"
+        self._strategy_config = self._get_strategy_config('legal')
         self.glossary: Dict[str, str] = {}
         
         # CIL Knowledge Context
@@ -127,8 +128,9 @@ TEXT:
             self.domain_insights = llm.generate(insight_prompt, model=knowledge_model).strip()
             logger.info("✓ Insight generated")
             
-            # 3. LOGIC
-            logic_prompt = f"""ROLE: "Layman in the Loop" (Feynman Technique).
+            # 3. LOGIC (Conditional based on config)
+            if self.should_enable_layman_logic():
+                logic_prompt = f"""ROLE: "Layman in the Loop" (Feynman Technique).
 CONTEXT: {self.context_note[:500]}
 
 1. Explain what this text *means* to an outsider.
@@ -138,8 +140,10 @@ CONTEXT: {self.context_note[:500]}
 TEXT:
 "{full_text[:3000]}"
 """
-            self.layman_logic = llm.generate(logic_prompt, model=knowledge_model, temperature=0.7).strip()
-            logger.info("✓ Layman's Logic generated")
+                self.layman_logic = llm.generate(logic_prompt, model=knowledge_model, temperature=0.7).strip()
+                logger.info("✓ Layman's Logic generated")
+            else:
+                logger.info("⏭ Layman's Logic skipped (disabled in config)")
             
         except Exception as e:
             logger.error(f"CIL generation failed: {e}")

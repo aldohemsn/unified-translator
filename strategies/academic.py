@@ -16,6 +16,7 @@ class AcademicStrategy(BaseStrategy):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self.name = "AcademicStrategy"
+        self._strategy_config = self._get_strategy_config('academic')
         
         # Dual Personas
         self.persona_translator = "You are a precise literal translator."
@@ -111,17 +112,21 @@ class AcademicStrategy(BaseStrategy):
         
         term_text = "\n".join([f"- {t.get('term')}: {t.get('translation')}" for t in self.terms]) if self.terms else "None"
         
-        # Prepare Context History
+        # Prepare Context History (size from config)
         history_snippet = "None"
+        window_config = self.get_context_window()
+        history_size = window_config.get('before', 8)
         if history_rows:
-            history_rows_data = history_rows[-8:] # Last 8 rows
+            history_rows_data = history_rows[-history_size:]
             history_snippet = json.dumps([{
                 'ID': r.get('ID'),
                 'Target': r.get('Target')
             } for r in history_rows_data], indent=2, ensure_ascii=False)
 
-        # Merge Protocol Instruction
-        merge_protocol = """
+        # Merge Protocol (Conditional based on config)
+        merge_protocol = ""
+        if self.should_enable_cross_row_merging():
+            merge_protocol = """
         CRITICAL PROTOCOL: CROSS-ROW MERGING
         1. If a sentence is split across Row A and Row B:
            - MERGE them into a single coherent sentence in the Target.
@@ -178,8 +183,9 @@ class AcademicStrategy(BaseStrategy):
                     'Target': new_target
                 })
                 
-            # Perform QA Check
-            processed = self.perform_qa(llm_client, processed, batch_rows)
+            # Perform QA Check (Conditional based on config)
+            if self.should_enable_qa_check():
+                processed = self.perform_qa(llm_client, processed, batch_rows)
             
             return processed
             

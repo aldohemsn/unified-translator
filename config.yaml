@@ -1,31 +1,149 @@
 # Unified Translator Configuration
+# This file defines global settings and per-strategy behavior options.
 
+# =============================================================================
 # LLM Configuration
+# =============================================================================
 llm:
   api_key_env_var: "GEMINI_API_KEY"
   default_model: "gemini-2.5-flash"
-  knowledge_model: "gemini-2.5-pro" # For CIL/Persona generation
+  knowledge_model: "gemini-2.5-pro"  # For pre-production analysis (CIL, Persona)
   max_retries: 5
   timeout: 60
 
-# Processing Configuration
+# =============================================================================
+# Processing Configuration (Global Defaults)
+# =============================================================================
 processing:
-  batch_size: 15
-  concurrency: 1 # Keep serial for CLI to avoid rate limits initially, increase if stable
-  context_window:
-    before: 3
-    after: 2
+  batch_size: 15  # Can be overridden per-strategy
+  concurrency: 1
 
-# Domain Specific Settings
+# =============================================================================
+# Strategy Configurations
+# Each strategy can customize behavior based on text type characteristics.
+# =============================================================================
+
 strategies:
-  academic:
-    extract_terms: true
-    persona_model: "gemini-2.5-pro"
-  
+  # ---------------------------------------------------------------------------
+  # LEGAL: Precision-focused. Sentence-by-sentence. No merging.
+  # ---------------------------------------------------------------------------
   legal:
-    cil_model: "gemini-2.5-pro"
-    glossary_enforcement: "strict"
+    # Context Window
+    context_window:
+      before: 3
+      after: 2
+    
+    # Full Document Context
+    inject_full_context: false  # Legal docs are self-contained per segment
+    full_context_max_chars: 0
+    
+    # CIL Components
+    cil:
+      enable_context: true
+      enable_insight: true
+      enable_logic: true  # Layman's Logic (Feynman) - important for legal
+      cil_model: "gemini-2.5-pro"
+    
+    # Cross-Row Merging
+    cross_row_merging: false  # DISABLED for legal precision
+    
+    # Terminology Enforcement
+    glossary_enforcement: "strict"  # Options: strict, moderate, none
+    
+    # QA Check
+    enable_qa_check: false  # Glossary enforcement is sufficient
+    
+    # Batch Size
+    batch_size: 1  # Process row-by-row for maximum precision
 
+  # ---------------------------------------------------------------------------
+  # ACADEMIC: Flow-focused. Allows merging. Two-phase persona.
+  # ---------------------------------------------------------------------------
+  academic:
+    # Context Window (for flow continuity)
+    context_window:
+      before: 8
+      after: 0  # No lookahead needed for academic editing
+    
+    # Full Document Context
+    inject_full_context: false  # Persona captures field context
+    full_context_max_chars: 0
+    
+    # Persona Generation
+    enable_dual_persona: true
+    persona_model: "gemini-2.5-pro"
+    
+    # Terminology Extraction
+    extract_terms: true
+    term_count: 20
+    
+    # Cross-Row Merging
+    cross_row_merging: true  # ENABLED - CAT tools often split sentences
+    
+    # Terminology Enforcement
+    glossary_enforcement: "moderate"  # Suggest but don't force
+    
+    # QA Check
+    enable_qa_check: true  # Check for omissions/hallucinations
+    
+    # Batch Size
+    batch_size: 15  # Efficient batching
+
+  # ---------------------------------------------------------------------------
+  # VIDEO: Context-heavy. Needs full transcript. VO/OS separation.
+  # ---------------------------------------------------------------------------
   video:
-    transcription_audit: true
+    # Context Window
+    context_window:
+      before: 5
+      after: 0
+    
+    # Full Document Context
+    inject_full_context: true  # CRITICAL for video - need topic awareness
+    full_context_max_chars: 3000  # First ~500 lines
+    
+    # Style Guide Generation
+    generate_style_guide: true
     style_guide_model: "gemini-2.5-flash"
+    
+    # Transcription Audit
+    enable_transcription_audit: true
+    
+    # VO/OS Separation
+    enable_vo_os_separation: true
+    
+    # Translationese Blacklist
+    enable_blacklist: true
+    blacklist_terms:
+      - "进行"
+      - "通过"
+      - "旨在"
+      - "它"
+      - "任何"
+    
+    # Cross-Row Merging
+    cross_row_merging: false  # Subtitles should maintain timing alignment
+    
+    # Terminology Enforcement
+    glossary_enforcement: "moderate"
+    
+    # QA Check
+    enable_qa_check: false  # Transcription audit is sufficient
+    
+    # Batch Size
+    batch_size: 30  # Video can handle larger batches
+
+# =============================================================================
+# Custom Strategy Template (Copy this to create your own)
+# =============================================================================
+# strategies:
+#   custom_project:
+#     context_window:
+#       before: 3
+#       after: 2
+#     inject_full_context: true
+#     full_context_max_chars: 2000
+#     cross_row_merging: false
+#     glossary_enforcement: "strict"
+#     enable_qa_check: true
+#     batch_size: 10

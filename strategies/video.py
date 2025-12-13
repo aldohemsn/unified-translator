@@ -16,6 +16,7 @@ class VideoStrategy(BaseStrategy):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self.name = "VideoStrategy"
+        self._strategy_config = self._get_strategy_config('video')
         self.style_guide = "No specific style guide generated."
         self.transcript_context = "" # Global context storage
 
@@ -29,14 +30,15 @@ class VideoStrategy(BaseStrategy):
             if not rows:
                 return
 
-            # 1. Store Global Context (First 500 lines ~ 2-3k words usually sufficient for context)
-            # In a real full-doc flow, we might summarize this.
-            self.transcript_context = " ".join([r.get('Source', '') for r in rows[:500]])
+            # 1. Store Global Context (if enabled in config)
+            if self.should_inject_full_context():
+                max_chars = self.get_full_context_max_chars()
+                self.transcript_context = " ".join([r.get('Source', '') for r in rows[:500]])[:max_chars]
+                logger.info(f"✓ Global transcript context stored ({len(self.transcript_context)} chars)")
             
             # 2. Generate Style Guide
-            if self.config.get('strategies', {}).get('video', {}).get('generate_style_guide', True):
+            if self._strategy_config.get('generate_style_guide', True):
                 llm = LLMClient(self.config)
-                # Use a representative snippet for style analysis
                 style_snippet = " ".join([r.get('Source', '') for r in rows[:200]])
                 self._generate_detailed_style_guide(llm, style_snippet)
 
@@ -84,21 +86,21 @@ class VideoStrategy(BaseStrategy):
             })
             
         history_snippet = "None"
+        window_config = self.get_context_window()
+        history_size = window_config.get('before', 5)
         if history_rows:
              history_snippet = json.dumps([{
                  'English': r.get('Source'),
                  'Chinese': r.get('Target')
-             } for r in history_rows[-5:]], indent=2, ensure_ascii=False)
+             } for r in history_rows[-history_size:]], indent=2, ensure_ascii=False)
 
-        # Translationese Blacklist (Complete)
-        blacklist_instruction = """
-        **NEGATIVE CONSTRAINTS (Translationese Blacklist)**:
-        - Do NOT use "进行" (conduct) as a dummy verb.
-        - Do NOT use "通过" (via/through) for 'by'.
-        - Do NOT use "旨在" (aim to).
-        - Avoid "它" (it) unless referring to a specific physical object.
-        - Avoid "任何" (any) in affirmative sentences (use "所有" or omit).
-        """
+        # Translationese Blacklist (from config or default)
+        blacklist_terms = self.get_blacklist_terms()
+        if blacklist_terms:
+            blacklist_lines = [f"- Do NOT use \"{term}\"" for term in blacklist_terms]
+            blacklist_instruction = "**NEGATIVE CONSTRAINTS (Translationese Blacklist)**:\n" + "\n".join(blacklist_lines)
+        else:
+            blacklist_instruction = ""
 
         prompt = f"""
         [STYLE GUIDE]
