@@ -23,10 +23,11 @@ class AcademicStrategy(BaseStrategy):
         self.persona_editor = "You are an expert academic editor."
         
         self.terms: List[Dict[str, str]] = [] # [{'term': '...', 'translation': '...'}]
+        self.semantic_segments: List[Dict[str, int]] = [] # [{"start": 0, "end": 10}, ...]
 
     def setup(self, input_file_path: str, context_files: Dict[str, str] = None) -> None:
         """
-        Analyze input to generate Dual Personas and Extract Terms.
+        Analyze input to generate Dual Personas, Extract Terms, and Semantic Segmentation.
         """
         logger.info("Initializing Academic Strategy Analysis...")
         handler = TSVHandler()
@@ -50,8 +51,84 @@ class AcademicStrategy(BaseStrategy):
                 term_model = self.get_model_for_stage('term_extraction')
                 self._extract_terms(llm, full_text, term_model)
 
+            # 3. Semantic Segmentation (Paragraph detection)
+            self._generate_semantic_segments(llm, rows, preprocessing_model)
+
         except Exception as e:
             logger.error(f"Setup analysis failed: {e}")
+
+    def _generate_semantic_segments(self, llm: LLMClient, rows: List[Dict[str, str]], model: str):
+        """
+        Divide the document into semantic paragraphs/sections for optimized batch processing.
+        """
+        logger.info("Generating semantic segments (Paragraphs)...")
+        try:
+            # Prepare numbered lines for LLM
+            lines_text = ""
+            for i, row in enumerate(rows[:300]): # Analyze first 300 rows to establish pattern (or full doc if small)
+                source = row.get('Source', '')[:100].replace('\n', ' ')
+                lines_text += f"{i}: {source}\n"
+            
+            prompt = f"""
+            Analyze the following academic text rows and group them into Semantic Segments (Paragraphs).
+            
+            GUIDELINES:
+            1. A "Segment" is a complete logical unit (e.g., a full paragraph, a section header + paragraph).
+            2. Do NOT split a sentence or a paragraph across segments.
+            3. Target segment size: 10-25 rows.
+            4. If a paragraph is huge (>25 rows), split it at a logical full stop.
+            
+            INPUT TEXT:
+            {lines_text}
+            
+            OUTPUT FORMAT (JSON Array):
+            [
+              {{"start": 0, "end": 15}},
+              {{"start": 16, "end": 28}},
+              ...
+            ]
+            Ensure all rows from 0 to {len(rows[:300])-1} are covered if possible.
+            """
+            
+            response = llm.generate(prompt, model=model, response_mime_type="application/json")
+            segments = json.loads(response)
+            
+            # Validate
+            self.semantic_segments = []
+            for seg in segments:
+                if isinstance(seg, dict) and 'start' in seg and 'end' in seg:
+                    self.semantic_segments.append({
+                        "start": int(seg['start']),
+                        "end": int(seg['end'])
+                    })
+            logger.info(f"✓ Generated {len(self.semantic_segments)} semantic segments.")
+            
+        except Exception as e:
+            logger.warning(f"Semantic segmentation failed: {e}. Fallback to fixed batch size.")
+            self.semantic_segments = []
+
+    def get_batch_boundaries(self, total_rows: int) -> List[tuple]:
+        """
+        Return batch boundaries based on semantic segments.
+        Falls back to fixed batch size if no segments available.
+        """
+        if self.semantic_segments:
+            # Note: The LLM only analyzed the first N rows. If total_rows > N, we need a strategy.
+            # For now, we use the segments we have, and then default batching for the rest.
+            boundaries = [(s['start'], s['end'] + 1) for s in self.semantic_segments]
+            
+            last_end = boundaries[-1][1]
+            if last_end < total_rows:
+                # Fill the rest with fixed batch size
+                batch_size = self.get_batch_size()
+                for i in range(last_end, total_rows, batch_size):
+                    boundaries.append((i, min(i + batch_size, total_rows)))
+            
+            return boundaries
+        else:
+            # Fallback to fixed processing
+            batch_size = self.get_batch_size()
+            return [(i, min(i + batch_size, total_rows)) for i in range(0, total_rows, batch_size)]
 
     def _generate_dual_personas(self, llm: LLMClient, text: str, model: str):
         prompt = f"""
