@@ -37,14 +37,18 @@ class TSVHandler:
         src_idx = find_index(self.aliases['Source'])
         tgt_idx = find_index(self.aliases['Target'])
 
-        # Check if we found them
-        if id_idx == -1 or src_idx == -1 or tgt_idx == -1:
-            # Fallback for 3-column files without standard headers
+        # Check if we found required columns (ID and Source)
+        if id_idx == -1 or src_idx == -1:
+            # Fallback for files without standard headers
             if len(headers) >= 3:
                 logger.warning("Standard headers not found. Falling back to positional mapping: Col 1=ID, 2=Source, 3=Target")
                 id_idx, src_idx, tgt_idx = 0, 1, 2
+            elif len(headers) == 2:
+                logger.warning("Standard headers not found. Falling back to positional mapping: Col 1=ID, 2=Source")
+                id_idx, src_idx = 0, 1
+                tgt_idx = -1
             else:
-                 raise ValueError(f"Could not identify required columns (ID, Source, Target) in headers: {headers}")
+                 raise ValueError(f"Could not identify required columns (ID, Source) in headers: {headers}")
 
         # Construct mapping
         original_to_standard = {}
@@ -117,6 +121,10 @@ class TSVHandler:
                         new_row[mapping[k]] = v
                     else:
                         new_row[k] = v # Keep extra columns
+                
+                # Ensure Target column exists
+                if 'Target' not in new_row:
+                    new_row['Target'] = ''
                 
                 # Filter empty rows (where Source or Target is empty)
                 if new_row.get('Source') or new_row.get('Target'):
