@@ -5,12 +5,12 @@
 # LLM Configuration
 # =============================================================================
 llm:
-  api_key_env_var: "GEMINI_API_KEY"
+  api_key_env_var: "GOOGLE_API_KEY"
   # Available models (by capability tier):
   #   - gemini-3-pro-preview: Highest quality, complex reasoning
   #   - gemini-2.5-pro: High quality, good balance
   #   - gemini-2.5-flash: Fast, good quality
-  #   - gemini-2.5-flash-light: Fastest, lowest cost
+  #   - gemini-2.5-flash-lite: Fastest, lowest cost
   default_model: "gemini-2.5-flash"
   max_retries: 5
   timeout: 60
@@ -35,7 +35,7 @@ strategies:
     # Stage-specific Models
     models:
       preprocessing: "gemini-2.5-flash"       # CIL analysis
-      segmentation: "gemini-2.5-flash-light"  # Semantic segmentation
+      segmentation: "gemini-2.5-flash-lite"  # Semantic segmentation
       translation: "gemini-3-pro-preview"     # Main translation ⭐
     
     # Context Window
@@ -72,7 +72,7 @@ strategies:
     # Stage-specific Models
     models:
       preprocessing: "gemini-2.5-flash"       # Dual persona generation
-      term_extraction: "gemini-2.5-flash-light" # Term extraction
+      term_extraction: "gemini-2.5-flash-lite" # Term extraction
       translation: "gemini-3-pro-preview"     # Main translation ⭐
       qa_check: "gemini-2.5-flash"            # QA analysis
     
@@ -110,7 +110,7 @@ strategies:
   video:
     # Stage-specific Models
     models:
-      context_compression: "gemini-2.5-flash-light" # Scene summary compression
+      context_compression: "gemini-2.5-flash-lite" # Scene summary compression
       style_guide: "gemini-2.5-flash"         # Style guide generation
       translation: "gemini-2.5-pro"           # Main translation ⭐
     
