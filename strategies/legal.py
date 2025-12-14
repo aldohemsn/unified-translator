@@ -89,7 +89,8 @@ class LegalStrategy(BaseStrategy):
 - 覆盖所有行，不遗漏
 """
             
-            response = llm.generate(segment_prompt, response_mime_type="application/json")
+            segmentation_model = self.get_model_for_stage('segmentation')
+            response = llm.generate(segment_prompt, model=segmentation_model, response_mime_type="application/json")
             segments = json.loads(response)
             
             # Validate segments
@@ -168,10 +169,7 @@ class LegalStrategy(BaseStrategy):
         if not full_text:
             return
         
-        knowledge_model = self.config.get('strategies', {}).get('legal', {}).get(
-            'cil_model', 
-            self.config.get('llm', {}).get('knowledge_model', 'gemini-2.5-pro')
-        )
+        preprocessing_model = self.get_model_for_stage('preprocessing')
         
         try:
             llm = LLMClient(self.config)
@@ -184,7 +182,7 @@ Summarize in one concise paragraph (under 100 words).
 Text:
 "{full_text[:3000]}"
 """
-            self.context_note = llm.generate(context_prompt, model=knowledge_model).strip()
+            self.context_note = llm.generate(context_prompt, model=preprocessing_model).strip()
             logger.info("✓ Context generated")
             
             # 2. INSIGHT
@@ -204,7 +202,7 @@ OUTPUT:
 TEXT:
 "{full_text[:3000]}"
 """
-            self.domain_insights = llm.generate(insight_prompt, model=knowledge_model).strip()
+            self.domain_insights = llm.generate(insight_prompt, model=preprocessing_model).strip()
             logger.info("✓ Insight generated")
             
             # 3. LOGIC (Conditional based on config)
@@ -219,7 +217,7 @@ CONTEXT: {self.context_note[:500]}
 TEXT:
 "{full_text[:3000]}"
 """
-                self.layman_logic = llm.generate(logic_prompt, model=knowledge_model, temperature=0.7).strip()
+                self.layman_logic = llm.generate(logic_prompt, model=preprocessing_model, temperature=0.7).strip()
                 logger.info("✓ Layman's Logic generated")
             else:
                 logger.info("⏭ Layman's Logic skipped (disabled in config)")
@@ -371,7 +369,8 @@ Example of INCORRECT output: "Analysis: The source uses..." (REJECTED)
 Please review and correct the Target for the marked segment."""
 
             try:
-                corrected = llm_client.generate(prompt, system_instruction=system_prompt).strip()
+                translation_model = self.get_model_for_stage('translation')
+                corrected = llm_client.generate(prompt, system_instruction=system_prompt, model=translation_model).strip()
                 corrected = corrected.replace("，，", "，")
                 corrected = self._enforce_glossary(source, corrected)
                 

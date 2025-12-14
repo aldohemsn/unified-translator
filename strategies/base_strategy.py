@@ -56,6 +56,26 @@ class BaseStrategy(ABC):
         """Whether to perform post-processing QA check."""
         return self._strategy_config.get('enable_qa_check', False)
     
+    def get_model_for_stage(self, stage: str) -> str:
+        """
+        Get the model to use for a specific processing stage.
+        
+        Stage names vary by strategy:
+        - Legal: preprocessing, segmentation, translation, postprocessing
+        - Academic: preprocessing, term_extraction, translation, qa_check
+        - Video: context_compression, style_guide, translation, transcription_audit
+        
+        Falls back to global default_model if stage-specific model not configured.
+        """
+        models_config = self._strategy_config.get('models', {})
+        stage_model = models_config.get(stage)
+        
+        if stage_model:
+            return stage_model
+        
+        # Fallback to global default
+        return self.config.get('llm', {}).get('default_model', 'gemini-2.5-flash')
+    
     # =========================================================================
     # CIL-specific (Legal)
     # =========================================================================

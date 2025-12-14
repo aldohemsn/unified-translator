@@ -6,8 +6,12 @@
 # =============================================================================
 llm:
   api_key_env_var: "GEMINI_API_KEY"
-  default_model: "gemini-2.5-flash-lite"
-  knowledge_model: "gemini-2.5-flash-lite"  # For pre-production analysis (CIL, Persona)
+  # Available models (by capability tier):
+  #   - gemini-3-pro-preview: Highest quality, complex reasoning
+  #   - gemini-2.5-pro: High quality, good balance
+  #   - gemini-2.5-flash: Fast, good quality
+  #   - gemini-2.5-flash-light: Fastest, lowest cost
+  default_model: "gemini-2.5-flash"
   max_retries: 5
   timeout: 60
 
@@ -28,6 +32,12 @@ strategies:
   # LEGAL: Precision-focused. Sentence-by-sentence. No merging.
   # ---------------------------------------------------------------------------
   legal:
+    # Stage-specific Models
+    models:
+      preprocessing: "gemini-2.5-flash"       # CIL analysis
+      segmentation: "gemini-2.5-flash-light"  # Semantic segmentation
+      translation: "gemini-3-pro-preview"     # Main translation ⭐
+    
     # Context Window
     context_window:
       before: 3
@@ -42,7 +52,6 @@ strategies:
       enable_context: true
       enable_insight: true
       enable_logic: true  # Layman's Logic (Feynman) - important for legal
-      cil_model: "gemini-2.5-flash-lite"
     
     # Cross-Row Merging
     cross_row_merging: false  # DISABLED for legal precision
@@ -60,6 +69,13 @@ strategies:
   # ACADEMIC: Flow-focused. Allows merging. Two-phase persona.
   # ---------------------------------------------------------------------------
   academic:
+    # Stage-specific Models
+    models:
+      preprocessing: "gemini-2.5-flash"       # Dual persona generation
+      term_extraction: "gemini-2.5-flash-light" # Term extraction
+      translation: "gemini-3-pro-preview"     # Main translation ⭐
+      qa_check: "gemini-2.5-flash"            # QA analysis
+    
     # Context Window (for flow continuity)
     context_window:
       before: 8
@@ -71,7 +87,6 @@ strategies:
     
     # Persona Generation
     enable_dual_persona: true
-    persona_model: "gemini-2.5-flash-lite"
     
     # Terminology Extraction
     extract_terms: true
@@ -93,6 +108,12 @@ strategies:
   # VIDEO: Context-heavy. Needs full transcript. VO/OS separation.
   # ---------------------------------------------------------------------------
   video:
+    # Stage-specific Models
+    models:
+      context_compression: "gemini-2.5-flash-light" # Scene summary compression
+      style_guide: "gemini-2.5-flash"         # Style guide generation
+      translation: "gemini-2.5-pro"           # Main translation ⭐
+    
     # Context Window
     context_window:
       before: 5
@@ -104,7 +125,6 @@ strategies:
     
     # Style Guide Generation
     generate_style_guide: true
-    style_guide_model: "gemini-2.5-flash-lite"
     
     # Transcription Audit
     enable_transcription_audit: true

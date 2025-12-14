@@ -40,14 +40,15 @@ class AcademicStrategy(BaseStrategy):
             full_text = "\n".join(snippet_texts)[:8000]
 
             llm = LLMClient(self.config)
-            persona_model = self.config.get('strategies', {}).get('academic', {}).get('persona_model', 'gemini-2.5-pro')
+            preprocessing_model = self.get_model_for_stage('preprocessing')
             
             # 1. Generate Dual Personas
-            self._generate_dual_personas(llm, full_text, persona_model)
+            self._generate_dual_personas(llm, full_text, preprocessing_model)
             
             # 2. Extract Terms
             if self.config.get('strategies', {}).get('academic', {}).get('extract_terms', True):
-                self._extract_terms(llm, full_text, persona_model)
+                term_model = self.get_model_for_stage('term_extraction')
+                self._extract_terms(llm, full_text, term_model)
 
         except Exception as e:
             logger.error(f"Setup analysis failed: {e}")
@@ -184,8 +185,10 @@ class AcademicStrategy(BaseStrategy):
         """
         
         try:
+            translation_model = self.get_model_for_stage('translation')
             response_text = llm_client.generate(
                 prompt,
+                model=translation_model,
                 system_instruction="You are an automated academic publishing engine. Output strictly valid JSON.",
                 response_mime_type="application/json"
             )
@@ -252,7 +255,8 @@ class AcademicStrategy(BaseStrategy):
         """
         
         try:
-            resp = llm_client.generate(prompt, response_mime_type="application/json")
+            qa_model = self.get_model_for_stage('qa_check')
+            resp = llm_client.generate(prompt, model=qa_model, response_mime_type="application/json")
             issues = json.loads(resp)
             
             issue_map = {i.get('ID'): i.get('Issue') for i in issues if i.get('Issue') != 'PASS'}

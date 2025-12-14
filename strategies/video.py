@@ -69,7 +69,8 @@ class VideoStrategy(BaseStrategy):
 输出格式（中文，控制在 500 字以内）：
 """
             
-            response = llm.generate(compress_prompt)
+            context_model = self.get_model_for_stage('context_compression')
+            response = llm.generate(compress_prompt, model=context_model)
             if response:
                 self.transcript_context = response.strip()
                 logger.info(f"✓ Compressed context generated ({len(self.transcript_context)} chars, down from {len(full_text[:self.get_full_context_max_chars()])})")
@@ -97,7 +98,8 @@ class VideoStrategy(BaseStrategy):
         {text[:5000]}
         """
         try:
-            val = llm.generate(prompt)
+            style_model = self.get_model_for_stage('style_guide')
+            val = llm.generate(prompt, model=style_model)
             if val:
                 self.style_guide = val
             logger.info("✓ Video Style Guide generated.")
@@ -165,8 +167,10 @@ class VideoStrategy(BaseStrategy):
         """
         
         try:
+            translation_model = self.get_model_for_stage('translation')
             response_text = llm_client.generate(
                 prompt,
+                model=translation_model,
                 response_mime_type="application/json"
             )
             results = json.loads(response_text)
