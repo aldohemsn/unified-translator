@@ -155,7 +155,9 @@ class VideoStrategy(BaseStrategy):
         [TASK]
         1. **Transcription Audit**: Check 'English' source for typos, ASR errors (homophones), or wrong names.
            - Protocol: If error found, PREPEND "⚠️ [TRANSCRIPTION FLAG]: <Note>" to 'Comments'.
-        2. **Translation**:
+        2. **Translation/Proofreading**:
+           - If 'Chinese' is empty: Translate the English source.
+           - If 'Chinese' exists: Proofread and improve the existing translation.
            - Determine if segment is VO (Spoken) or OS (Text).
            - Apply appropriate style (VO=Fluid, OS=Concise).
         

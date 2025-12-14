@@ -50,7 +50,7 @@ def get_file_path(prompt: str, must_exist: bool = True) -> str:
 def select_strategy() -> str:
     """Let user select translation strategy."""
     strategies = {
-        '1': ('legal', '🏛️  Legal - Hong Kong law documents with CIL methodology'),
+        '1': ('legal', '🏛️  Legal - Legal documents with CIL methodology'),
         '2': ('academic', '📚 Academic - Scholarly papers with dual-persona proofreading'),
         '3': ('video', '🎬 Video - Subtitles with transcription review and style guide')
     }

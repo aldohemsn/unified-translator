@@ -280,12 +280,16 @@ DO NOT use any alternative translations. This is NON-NEGOTIABLE.
         processed_batch = []
         cil_prompt = self._build_cil_prompt()
         
-        system_prompt = f"""You are a legal translation expert specializing in Hong Kong law.
+        system_prompt = f"""You are a legal translation expert.
 
 {cil_prompt}
 
 【Task】
-Review the Target translation for the marked segment.
+Translate or review the Target for the marked segment.
+- If Target is empty: Translate the Source text.
+- If Target exists: Review and correct the existing translation.
+
+In both cases:
 1. Check Glossary compliance first.
 2. Ensure logic flow (Logic).
 3. Ensure context coherence (Context).
@@ -295,10 +299,8 @@ Review the Target translation for the marked segment.
 If you use a translation different from the Glossary, your output will be REJECTED.
 
 【Output Format】
-CRITICAL: Return ONLY the corrected Target text. Do NOT include any analysis, explanation, reasoning, or commentary.
-Your response must be the translation ONLY - nothing else. If no changes needed, return original Target.
-Example of CORRECT output: 第一被告及第五被告须...
-Example of INCORRECT output: "Analysis: The source uses..." (REJECTED)
+CRITICAL: Return ONLY the translated/corrected text. Do NOT include any analysis, explanation, reasoning, or commentary.
+Your response must be the translation ONLY - nothing else.
 """
         
         # We need ALL history + current batch available for the window builder
@@ -354,8 +356,11 @@ Example of INCORRECT output: "Analysis: The source uses..." (REJECTED)
             for p_row in available_past[start_past:]:
                 window_parts.append(f"[Segment {p_row.get('ID')}]: {p_row.get('Source')} -> {p_row.get('Target')}")
             
-            # Current
-            window_parts.append(f">>> [Segment {row.get('ID')} - TARGET]:\n    Source: {source}\n    Target: {target}")
+            # Current - show different format based on whether Target exists
+            if target:
+                window_parts.append(f">>> [Segment {row.get('ID')} - TO REVIEW]:\n    Source: {source}\n    Target: {target}")
+            else:
+                window_parts.append(f">>> [Segment {row.get('ID')} - TO TRANSLATE]:\n    Source: {source}")
             
             # Future 2 (from remaining batch_rows)
             for f_row in batch_rows[i+1 : i+3]:
@@ -363,10 +368,12 @@ Example of INCORRECT output: "Analysis: The source uses..." (REJECTED)
             
             context_window_str = "\n".join(window_parts)
             
+            
+            task_instruction = "Please translate the Source for the marked segment." if not target else "Please review and correct the Target for the marked segment."
             prompt = f"""【Context Window】
 {context_window_str}
 
-Please review and correct the Target for the marked segment."""
+{task_instruction}"""
 
             try:
                 translation_model = self.get_model_for_stage('translation')

@@ -39,7 +39,7 @@ python main.py input.tsv --mode legal --output output.tsv
 
 | Strategy | Use Case | Features |
 |----------|----------|----------|
-| **Legal** | Hong Kong law documents | CIL methodology, Glossary enforcement |
+| **Legal** | Legal documents (contracts, judgments, regulations) | CIL methodology, Glossary enforcement |
 | **Academic** | Scholarly papers | Dual-persona proofreading, QA checks |
 | **Video** | Subtitles/Transcripts | Style guide, Translationese detection |
 
@@ -48,9 +48,20 @@ python main.py input.tsv --mode legal --output output.tsv
 TSV file with columns:
 - `ID` - Unique identifier for each row
 - `Source` - Source text
-- `Target` - Target text (can be empty or pre-translated)
+- `Target` - *(Optional)* Pre-translated text for proofreading mode
 
-Example:
+**Two modes:**
+- **Translation mode**: If `Target` column is missing or empty → translate from scratch
+- **Proofreading mode**: If `Target` has content → review and improve existing translation
+
+Example (Translation mode):
+```
+ID	Source
+1	Hello world
+2	Good morning
+```
+
+Example (Proofreading mode):
 ```
 ID	Source	Target
 1	Hello world	你好世界
