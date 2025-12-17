@@ -20,3 +20,4 @@ venv/
 # Output
 *_output.tsv
 *_processed.tsv
+sample/*.tsv

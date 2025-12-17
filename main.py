@@ -41,11 +41,20 @@ def main():
     args = parser.parse_args()
     
     # 0. Load Environment
-    load_dotenv()
+    load_dotenv(override=True)
     
     # 1. Load Config
     config = load_config(args.config)
     
+    # Debug: Check API Key
+    key_var = config.get('llm', {}).get('api_key_env_var', 'GEMINI_API_KEY')
+    api_key = os.getenv(key_var)
+    if api_key:
+        masked_key = f"{api_key[:4]}...{api_key[-4:]}" if len(api_key) > 8 else "***"
+        logger.info(f"Loaded API Key from '{key_var}': {masked_key} (Length: {len(api_key)})")
+    else:
+        logger.error(f"FAILED to load API Key from '{key_var}'")
+
     # 2. Init LLM Client
     try:
         llm_client = LLMClient(config)

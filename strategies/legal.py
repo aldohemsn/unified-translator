@@ -49,9 +49,10 @@ class LegalStrategy(BaseStrategy):
     def _generate_semantic_segments(self, file_path: str) -> None:
         """
         Use LLM to divide document into semantic segments (complete legal arguments).
-        Each segment becomes a processing batch instead of fixed batch_size=1.
+        Analyzes the full text in batches of 200 lines.
+        Auto-merges small segments to ensure efficiency.
         """
-        logger.info("Generating semantic segments...")
+        logger.info("Generating semantic segments for full text...")
         
         try:
             handler = TSVHandler()
@@ -60,53 +61,134 @@ class LegalStrategy(BaseStrategy):
                 self.semantic_segments = []
                 return
             
-            # Prepare numbered lines for LLM
-            numbered_lines = []
-            for i, row in enumerate(rows[:200]):  # Limit to first 200 rows for efficiency
-                source = row.get('Source', '')[:100]  # Truncate long lines
-                numbered_lines.append(f"{i}: {source}")
+            raw_segments = []
+            analysis_batch_size = 200
+            total_rows = len(rows)
             
-            lines_text = "\n".join(numbered_lines)
-            
+            segmentation_model = self.get_model_for_stage('segmentation')
             llm = LLMClient(self.config)
-            
-            segment_prompt = f"""分析以下法律文本，按【语义段】划分。
 
-一个语义段是一个完整的法律论点、事实陈述或程序说明。
-每段应包含 2-8 行（不超过8行）。
+            for batch_start in range(0, total_rows, analysis_batch_size):
+                batch_end = min(batch_start + analysis_batch_size, total_rows)
+                chunk_rows = rows[batch_start:batch_end]
+                
+                logger.info(f"Analyzing segmentation for lines {batch_start}-{batch_end}...")
+
+                lines_text_parts = []
+                for i, row in enumerate(chunk_rows):
+                    source = row.get('Source', '')[:100].replace('\n', ' ')
+                    lines_text_parts.append(f"{i}: {source}")
+                
+                lines_text = "\n".join(lines_text_parts)
+                
+                # Dynamic max lines in prompt based on chunk size
+                relative_max = len(chunk_rows) - 1
+
+                segment_prompt = f"""分析以下法律文本（第 {batch_start} - {batch_end} 行），按【完整语意群】划分。
+
+目标：将文本划分为较大的语义块，以便进行上下文连贯的翻译。
+每个语义块应当包含至少 4 行，除非是独立的标题或极短的条款。
 
 输入格式：
-行号: 内容摘要
+相对行号: 内容摘要
 
 {lines_text}
 
 输出格式 (JSON数组):
-[{{"start": 0, "end": 3}}, {{"start": 4, "end": 7}}, ...]
+[{{"start": 0, "end": 5}}, {{"start": 6, "end": 15}}, ...]
 
 注意：
-- start 和 end 都是行号（0-indexed）
-- 每段的 end 是该段最后一行的行号
-- 覆盖所有行，不遗漏
+- start 和 end 是基于提供文本的相对行号（0-{relative_max}）
+- 必须覆盖所有行，从 0 到 {relative_max}，不遗漏任何一行
+- 优先合并短句，避免碎片化
 """
+                
+                try:
+                    response = llm.generate(segment_prompt, model=segmentation_model, response_mime_type="application/json")
+                    segments = json.loads(response)
+                    
+                    # Validate coverage for this batch
+                    # We need to ensure continuity within the batch
+                    
+                    current_batch_segments = []
+                    last_end = -1
+                    
+                    for seg in segments:
+                        if isinstance(seg, dict) and 'start' in seg and 'end' in seg:
+                            rel_start = int(seg['start'])
+                            rel_end = int(seg['end'])
+                            
+                            # Sanity checks
+                            rel_start = max(0, rel_start)
+                            rel_end = min(rel_end, relative_max)
+                            
+                            if rel_start > rel_end: 
+                                continue
+                                
+                            # Check for gaps
+                            if rel_start > last_end + 1:
+                                # Fill gap
+                                gap_start = last_end + 1
+                                gap_end = rel_start - 1
+                                current_batch_segments.append({
+                                    "start": gap_start + batch_start,
+                                    "end": gap_end + batch_start
+                                })
+                            
+                            abs_start = rel_start + batch_start
+                            abs_end = rel_end + batch_start
+                            current_batch_segments.append({
+                                "start": abs_start,
+                                "end": abs_end
+                            })
+                            last_end = rel_end
+
+                    # Check for trailing gap in batch
+                    if last_end < relative_max:
+                        current_batch_segments.append({
+                            "start": (last_end + 1) + batch_start,
+                            "end": relative_max + batch_start
+                        })
+                    
+                    raw_segments.extend(current_batch_segments)
+                            
+                except Exception as e:
+                    logger.warning(f"Segmentation failed for batch {batch_start}-{batch_end}: {e}")
+                    # Fallback: create a single segment for this entire batch
+                    raw_segments.append({"start": batch_start, "end": batch_end - 1})
+
+            # --- Post-Processing: Merge Small Segments ---
+            merged_segments = []
+            min_lines = 4
+            max_lines = 30 # Safe upper limit for context window
             
-            segmentation_model = self.get_model_for_stage('segmentation')
-            response = llm.generate(segment_prompt, model=segmentation_model, response_mime_type="application/json")
-            segments = json.loads(response)
+            if not raw_segments:
+                self.semantic_segments = []
+                return
+
+            current_seg = raw_segments[0]
             
-            # Validate segments
-            valid_segments = []
-            for seg in segments:
-                if isinstance(seg, dict) and 'start' in seg and 'end' in seg:
-                    valid_segments.append({
-                        "start": int(seg['start']),
-                        "end": int(seg['end'])
-                    })
+            for next_seg in raw_segments[1:]:
+                current_size = current_seg['end'] - current_seg['start'] + 1
+                next_size = next_seg['end'] - next_seg['start'] + 1
+                
+                # Merge if current is too small AND combined size is safe
+                if (current_size < min_lines) and (current_size + next_size <= max_lines):
+                    # Merge next into current
+                    current_seg['end'] = next_seg['end']
+                else:
+                    # Finalize current and move to next
+                    merged_segments.append(current_seg)
+                    current_seg = next_seg
             
-            self.semantic_segments = valid_segments
-            logger.info(f"✓ Generated {len(self.semantic_segments)} semantic segments")
+            # Append the last segment
+            merged_segments.append(current_seg)
+            
+            self.semantic_segments = merged_segments
+            logger.info(f"✓ Generated {len(self.semantic_segments)} semantic segments (after merging small chunks).")
             
         except Exception as e:
-            logger.warning(f"Semantic segmentation failed: {e}. Using default batching.")
+            logger.warning(f"Semantic segmentation process failed: {e}. Using default batching.")
             self.semantic_segments = []
     
     def get_batch_boundaries(self, total_rows: int) -> List[tuple]:
@@ -132,7 +214,7 @@ class LegalStrategy(BaseStrategy):
                 header = next(reader, None)
                 
                 # Simple header detection
-                if header and header[0].lower() in ['english', 'term', 'source', 'en']:
+                if header and header[0].lower() in ['english', 'term', 'source', 'en', 'en_term']:
                     pass  # Header skipped
                 else:
                     # Treat as data if not clearly a header
@@ -258,8 +340,12 @@ DO NOT use any alternative translations. This is NON-NEGOTIABLE.
         for term_en, term_cn in self.glossary.items():
             if term_en in source:
                 options = [opt.strip() for opt in term_cn.split('/')]
+                # Simple check: if NONE of the options appear in target
+                # Note: This can be flaky with subsets of words, but serves as a basic check
                 if not any(opt in target for opt in options):
-                    violations.append(f"{term_en} should be {term_cn}")
+                    # Double check if English term itself is in target (sometimes kept as is)
+                    if term_en not in target:
+                        violations.append(f"{term_en} should be {term_cn}")
         
         if violations:
             target += f" [[GLOSSARY_VIOLATION: {'; '.join(violations)}]]"
@@ -274,120 +360,115 @@ DO NOT use any alternative translations. This is NON-NEGOTIABLE.
         window_builder: ContextWindowBuilder
     ) -> List[Dict[str, str]]:
         """
-        Process using sliding window PER ROW (legal precision mode).
-        Use ContextWindowBuilder properly.
+        Process the ENTIRE semantic segment in a SINGLE LLM call.
+        Supports CROSS-ROW MERGING of translation.
         """
-        processed_batch = []
         cil_prompt = self._build_cil_prompt()
+        
+        lines_input = []
+        ids_map = {} 
+        
+        for i, row in enumerate(batch_rows):
+            rid = row.get('ID', str(i))
+            ids_map[i] = rid
+            source = row.get('Source', '')
+            target = row.get('Target', '')
+            
+            if target:
+                lines_input.append(f"[{i}] REVIEW_TARGET: {target} (SOURCE: {source})")
+            else:
+                lines_input.append(f"[{i}] SOURCE: {source}")
+        
+        content_block = "\n".join(lines_input)
         
         system_prompt = f"""You are a legal translation expert.
 
 {cil_prompt}
 
 【Task】
-Translate or review the Target for the marked segment.
-- If Target is empty: Translate the Source text.
-- If Target exists: Review and correct the existing translation.
+Translate the provided block of text into **Simplified Chinese (简体中文)**.
+The input is a SEMANTICALLY COHERENT SEGMENT.
 
-In both cases:
-1. Check Glossary compliance first.
-2. Ensure logic flow (Logic).
-3. Ensure context coherence (Context).
-4. Fix grammar/punctuation.
+【Merge Rules】
+1. You MAY merge multiple source lines into a single target line if they form a single sentence/logic unit.
+2. If you merge Content from Line X into Line Y:
+   - Line Y should contain the full translation.
+   - Line X MUST return exactly: "[[MERGED_UP]]" (if merged into previous) or "[[MERGED_DOWN]]" (if merged into next).
+   - Use "[[MERGED_UP]]" preferably when merging with preceding lines.
+   
+3. STRICT ROW ALIGNMENT:
+   - You MUST provide a JSON output key for EVERY input index (0 to {len(batch_rows)-1}).
+   - No index should be missing.
 
-【CRITICAL WARNING】
-If you use a translation different from the Glossary, your output will be REJECTED.
+【Glossary & Logic】
+- Adhere strictly to the Glossary.
+- Ensure context coherence.
+- **Target Language**: Simplified Chinese.
+- **Handling English**: Translate English text into Chinese. Only retain English for proper nouns, codes, formulas, or specific legal citations where keeping the original is standard practice.
 
 【Output Format】
-CRITICAL: Return ONLY the translated/corrected text. Do NOT include any analysis, explanation, reasoning, or commentary.
-Your response must be the translation ONLY - nothing else.
+Return a JSON object mapping index to translation.
+Example:
+{{
+  "0": "第0行和第1行的完整翻译",
+  "1": "[[MERGED_UP]]",
+  "2": "第2行的翻译"
+}}
 """
         
-        # We need ALL history + current batch available for the window builder
-        # 'history_rows' contains previously processed rows (all prior batches)
-        # 'processed_batch' contains previously processed rows in THIS batch
-        
-        # But wait, 'window_builder' was initialized with ALL raw data in 'Processor.run'.
-        # However, for the BEST context, we should ideally show the *corrected* versions of previous rows.
-        # The 'window_builder' passed from Processor typically holds raw rows.
-        # Let's see if we can use 'history_rows' to patch the window dynamically or 
-        # build a local window if strict sequential dependency is needed.
-        
-        # For simplicity and standard compliance with Processor, we use the passed 'window_builder' 
-        # to get the SURROUNDING context (which might look at raw future rows, and raw past rows).
-        # IMPROVEMENT: If we want to show *corrected* past rows, we'd need to update the window builder's data 
-        # or construct windows manually here. Given `window_builder.build(index)` works on indices relative to total data.
-        
-        # We need to know the GLOBAL index of the current row to query the window builder.
-        # This is strictly tricky if we don't pass global indices.
-        # Let's Assume batch_rows have 'ID' which *might* map to index if numeric, but safest is to rely on passed objects.
-        
-        # Workaround: Recalculate global index? 
-        # Actually Processor calls process_batch. 
-        # Let's rely on standard sliding window textual construction manually if needed, 
-        # OR assume we just use the local batch context if global is hard.
-        
-        # BETTER APPROACH matching `legal-translation-cil`:
-        # Reconstruct window locally using history + batch.
-        
-        full_context_data = history_rows + batch_rows # Use raw for current batch initially
-        history_len = len(history_rows)
-        
-        for i, row in enumerate(batch_rows):
-            source = row.get('Source', '')
-            target = row.get('Target', '')
-            
-            if not source.strip():
-                processed_batch.append(row)
-                continue
-            
-            # Consturct window locally
-            # Before: last 3 from (history + processed_so_far)
-            # After: next 2 from (rest of batch)
-            
-            current_processed_so_far = processed_batch 
-            available_past = history_rows + current_processed_so_far
-            
-            # Build window string manually for clarity and precision
-            window_parts = []
-            
-            # Past 3
-            start_past = max(0, len(available_past) - 3)
-            for p_row in available_past[start_past:]:
-                window_parts.append(f"[Segment {p_row.get('ID')}]: {p_row.get('Source')} -> {p_row.get('Target')}")
-            
-            # Current - show different format based on whether Target exists
-            if target:
-                window_parts.append(f">>> [Segment {row.get('ID')} - TO REVIEW]:\n    Source: {source}\n    Target: {target}")
-            else:
-                window_parts.append(f">>> [Segment {row.get('ID')} - TO TRANSLATE]:\n    Source: {source}")
-            
-            # Future 2 (from remaining batch_rows)
-            for f_row in batch_rows[i+1 : i+3]:
-                 window_parts.append(f"[Segment {f_row.get('ID')}]: {f_row.get('Source')}...")
-            
-            context_window_str = "\n".join(window_parts)
-            
-            
-            task_instruction = "Please translate the Source for the marked segment." if not target else "Please review and correct the Target for the marked segment."
-            prompt = f"""【Context Window】
-{context_window_str}
+        prompt = f"""
+【Input Segment】
+{content_block}
 
-{task_instruction}"""
-
+【Output (JSON)】
+"""
+        processed_batch = []
+        
+        try:
+            translation_model = self.get_model_for_stage('translation')
+            response = llm_client.generate(prompt, system_instruction=system_prompt, model=translation_model, response_mime_type="application/json")
+            
             try:
-                translation_model = self.get_model_for_stage('translation')
-                corrected = llm_client.generate(prompt, system_instruction=system_prompt, model=translation_model).strip()
-                corrected = corrected.replace("，，", "，")
-                corrected = self._enforce_glossary(source, corrected)
-                
-                processed_batch.append({
-                    'ID': row['ID'],
-                    'Source': source,
-                    'Target': corrected
-                })
-            except Exception as e:
-                logger.warning(f"Row {row.get('ID')} error: {e}")
-                processed_batch.append(row)
-                
+                results_map = json.loads(response)
+            except json.JSONDecodeError:
+                # Fallback: try to find JSON block if mixed with text
+                import re
+                match = re.search(r'\{.*\}', response, re.DOTALL)
+                if match:
+                    results_map = json.loads(match.group(0))
+                else:
+                    raise ValueError("Could not parse JSON response")
+
+            # Map results back to rows
+            for i, row in enumerate(batch_rows):
+                idx_str = str(i)
+                if idx_str in results_map:
+                    raw_translation = results_map[idx_str]
+                    
+                    if "[[MERGED_UP]]" in raw_translation:
+                        final_translation = "[[已向上合并]]"
+                    elif "[[MERGED_DOWN]]" in raw_translation:
+                        final_translation = "[[已向下合并]]"
+                    else:
+                        clean_translation = raw_translation.replace("，，", "，")
+                        final_translation = self._enforce_glossary(row.get('Source', ''), clean_translation)
+                    
+                    processed_batch.append({
+                        'ID': row['ID'],
+                        'Source': row['Source'],
+                        'Target': final_translation
+                    })
+                else:
+                    logger.warning(f"Missing translation for index {i} in batch response. Using placeholder.")
+                    processed_batch.append({
+                        'ID': row['ID'],
+                        'Source': row['Source'],
+                        'Target': "[[MISSING_TRANSLATION]]" # Better to flag than ignore
+                    })
+                    
+        except Exception as e:
+            logger.error(f"Batch processing failed: {e}")
+            # Fallback: return original rows
+            processed_batch.extend(batch_rows)
+            
         return processed_batch
