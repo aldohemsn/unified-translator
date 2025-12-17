@@ -127,7 +127,8 @@ class TSVHandler:
                     new_row['Target'] = ''
                 
                 # Filter empty rows (where Source or Target is empty)
-                if new_row.get('Source') or new_row.get('Target'):
+                # Also keep LOCKED rows even if empty
+                if new_row.get('Source') or new_row.get('Target') or new_row.get('LOCKED') == '1':
                     data.append(new_row)
                     
         return data
