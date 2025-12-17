@@ -362,6 +362,7 @@ DO NOT use any alternative translations. This is NON-NEGOTIABLE.
         """
         Process the ENTIRE semantic segment in a SINGLE LLM call.
         Supports CROSS-ROW MERGING of translation.
+        Handles LOCKED rows (context only, no translation).
         """
         cil_prompt = self._build_cil_prompt()
         
@@ -373,8 +374,11 @@ DO NOT use any alternative translations. This is NON-NEGOTIABLE.
             ids_map[i] = rid
             source = row.get('Source', '')
             target = row.get('Target', '')
+            is_locked = row.get('LOCKED', '0') == '1'
             
-            if target:
+            if is_locked:
+                 lines_input.append(f"[{i}] [LOCKED] {source}")
+            elif target:
                 lines_input.append(f"[{i}] REVIEW_TARGET: {target} (SOURCE: {source})")
             else:
                 lines_input.append(f"[{i}] SOURCE: {source}")
@@ -399,6 +403,7 @@ The input is a SEMANTICALLY COHERENT SEGMENT.
 3. STRICT ROW ALIGNMENT:
    - You MUST provide a JSON output key for EVERY input index (0 to {len(batch_rows)-1}).
    - No index should be missing.
+   - For lines marked [LOCKED], return "[[LOCKED]]" as the value.
 
 【Glossary & Logic】
 - Adhere strictly to the Glossary.
@@ -412,7 +417,7 @@ Example:
 {{
   "0": "第0行和第1行的完整翻译",
   "1": "[[MERGED_UP]]",
-  "2": "第2行的翻译"
+  "2": "[[LOCKED]]"
 }}
 """
         
@@ -442,10 +447,25 @@ Example:
             # Map results back to rows
             for i, row in enumerate(batch_rows):
                 idx_str = str(i)
-                if idx_str in results_map:
+                is_locked = row.get('LOCKED', '0') == '1'
+
+                if is_locked:
+                    # For locked rows, keep original Target content.
+                    # If original Target is empty, it should remain empty.
+                    final_translation = row.get('Target')
+                    processed_batch.append({
+                        'ID': row['ID'],
+                        'Source': row['Source'],
+                        'Target': final_translation,
+                        'LOCKED': '1'
+                    })
+                elif idx_str in results_map:
                     raw_translation = results_map[idx_str]
                     
-                    if "[[MERGED_UP]]" in raw_translation:
+                    if raw_translation == "[[LOCKED]]":
+                        # Should have been handled by is_locked check, but just in case
+                         final_translation = row.get('Source')
+                    elif "[[MERGED_UP]]" in raw_translation:
                         final_translation = "[[已向上合并]]"
                     elif "[[MERGED_DOWN]]" in raw_translation:
                         final_translation = "[[已向下合并]]"
@@ -456,14 +476,16 @@ Example:
                     processed_batch.append({
                         'ID': row['ID'],
                         'Source': row['Source'],
-                        'Target': final_translation
+                        'Target': final_translation,
+                        'LOCKED': row.get('LOCKED', '0')
                     })
                 else:
                     logger.warning(f"Missing translation for index {i} in batch response. Using placeholder.")
                     processed_batch.append({
                         'ID': row['ID'],
                         'Source': row['Source'],
-                        'Target': "[[MISSING_TRANSLATION]]" # Better to flag than ignore
+                        'Target': "[[MISSING_TRANSLATION]]", # Better to flag than ignore
+                        'LOCKED': row.get('LOCKED', '0')
                     })
                     
         except Exception as e:
