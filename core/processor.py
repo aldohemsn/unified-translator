@@ -24,7 +24,6 @@ class Processor:
         
         # 1. Read Data
         raw_rows = self.tsv_handler.read_file(input_path)
-        logger.info(f"Loaded {len(raw_rows)} rows.")
         
         if not raw_rows:
             logger.warning("Empty input file.")
@@ -39,15 +38,46 @@ class Processor:
         
         processed_rows = []
         
-        # 3. Batch Loop - Check if strategy provides custom batch boundaries
+        # Determine Batches
+        use_custom_boundaries = False
+        batch_boundaries = []
+        
         if hasattr(strategy, 'get_batch_boundaries') and callable(strategy.get_batch_boundaries):
+            use_custom_boundaries = True
             batch_boundaries = strategy.get_batch_boundaries(len(raw_rows))
             total_batches = len(batch_boundaries)
-            
+        else:
+            total_batches = math.ceil(len(raw_rows) / self.batch_size)
+        
+        # --- JOB SUMMARY & CONFIRMATION ---
+        print("\n" + "="*50)
+        print("🚀 JOB SUMMARY")
+        print("="*50)
+        print(f"📂 Input File:      {input_path}")
+        print(f"💾 Output File:     {output_path}")
+        print(f"🧠 Strategy:        {strategy.name}")
+        print(f"📚 Glossary:        {getattr(strategy, 'glossary_path', '(None)')}") # Assuming we track this
+        print(f"🎨 Style Guide:     {getattr(strategy, 'style_guide_path', '(None)')}")
+        print(f"📊 Total Rows:      {len(raw_rows)}")
+        print(f"📦 Est. Batches:    {total_batches}")
+        print("="*50)
+        
+        try:
+            input("\nPress Enter to start processing (or Ctrl+C to cancel)...")
+        except KeyboardInterrupt:
+            print("\nOperation cancelled.")
+            return
+
+        print("\nStarting processing...")
+        start_time = time.time()
+        
+        # 3. Batch Loop
+        if use_custom_boundaries:
             for batch_num, (start, end) in enumerate(batch_boundaries, 1):
                 batch = raw_rows[start:end]
                 
-                logger.info(f"Processing Batch {batch_num}/{total_batches} ({len(batch)} rows, lines {start+1}-{end})...")
+                print(f"⏳ Processing Batch {batch_num}/{total_batches} (Rows {start+1}-{end})...")
+                logger.debug(f"Batch details: Start={start}, End={end}, Size={len(batch)}")
                 
                 try:
                     results = strategy.process_batch(
@@ -58,7 +88,7 @@ class Processor:
                     )
                     
                     if len(results) != len(batch):
-                        logger.error(f"Row count mismatch in batch {batch_num}. Using fallback.")
+                        logger.error(f"Row count mismatch in batch {batch_num}. Expected {len(batch)}, got {len(results)}. Using fallback.")
                         results = batch
                     
                     processed_rows.extend(results)
@@ -70,13 +100,11 @@ class Processor:
                 time.sleep(0.5)
         else:
             # Original fixed batch_size loop
-            total_batches = math.ceil(len(raw_rows) / self.batch_size)
-            
             for i in range(0, len(raw_rows), self.batch_size):
                 batch_num = (i // self.batch_size) + 1
                 batch = raw_rows[i : i + self.batch_size]
                 
-                logger.info(f"Processing Batch {batch_num}/{total_batches} ({len(batch)} rows)...")
+                print(f"⏳ Processing Batch {batch_num}/{total_batches} ({len(batch)} rows)...")
                 
                 try:
                     results = strategy.process_batch(
@@ -97,6 +125,9 @@ class Processor:
                     processed_rows.extend(batch)
                 
                 time.sleep(0.5)
+
+        total_time = time.time() - start_time
+        print(f"\n✅ Processing complete in {total_time:.2f}s")
 
         # 4. Write Output
         logger.info(f"Writing results to {output_path}")

@@ -21,6 +21,11 @@ class LegalStrategy(BaseStrategy):
         self.name = "LegalStrategy"
         self._strategy_config = self._get_strategy_config('legal')
         self.glossary: Dict[str, str] = {}
+        self.glossary_path = None
+        
+        # Style Guide
+        self.style_guide_path = None
+        self.style_guide_content = ""
         
         # CIL Knowledge Context
         self.context_note = ""      # Context: Topic, Tone, Audience
@@ -32,20 +37,37 @@ class LegalStrategy(BaseStrategy):
 
     def setup(self, input_file_path: str, context_files: Dict[str, str] = None) -> None:
         """
-        Load glossary, generate CIL context, and perform semantic segmentation.
+        Load glossary, style guide, generate CIL context, and perform semantic segmentation.
         """
         # 1. Load Glossary
         if context_files and 'glossary' in context_files:
-            glossary_path = context_files['glossary']
-            self._load_glossary(glossary_path)
+            self.glossary_path = context_files['glossary']
+            self._load_glossary(self.glossary_path)
             
-        # 2. Generate CIL Context (if source file provided or use input)
+        # 2. Load Style Guide
+        if context_files and 'style_guide' in context_files:
+            self.style_guide_path = context_files['style_guide']
+            self._load_style_guide(self.style_guide_path)
+            
+        # 3. Generate CIL Context (if source file provided or use input)
         source_path = context_files.get('source', input_file_path) if context_files else input_file_path
         self._generate_cil_context(source_path)
         
-        # 3. Perform Semantic Segmentation
+        # 4. Perform Semantic Segmentation
         self._generate_semantic_segments(source_path)
-    
+
+    def _load_style_guide(self, path: str):
+        """Load Style Guide content."""
+        if not os.path.exists(path):
+            logger.warning(f"Style guide file not found: {path}")
+            return
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                self.style_guide_content = f.read().strip()
+            logger.info(f"Loaded style guide from {path} ({len(self.style_guide_content)} chars).")
+        except Exception as e:
+            logger.error(f"Error loading style guide: {e}")
+            
     def _generate_semantic_segments(self, file_path: str) -> None:
         """
         Use LLM to divide document into semantic segments (complete legal arguments).
@@ -159,27 +181,56 @@ class LegalStrategy(BaseStrategy):
 
             # --- Post-Processing: Merge Small Segments ---
             merged_segments = []
-            min_lines = 4
-            max_lines = 30 # Safe upper limit for context window
+            
+            # Configuration for merging
+            TARGET_CHARS = 1500      # Aim for ~1500 chars per batch (approx 500-800 tokens)
+            MAX_LINES_PER_BATCH = 40 # Hard limit to prevent JSON complexity issues
             
             if not raw_segments:
                 self.semantic_segments = []
                 return
 
+            def get_segment_text_len(seg_start, seg_end):
+                """Calculate total character length of a segment range."""
+                length = 0
+                for i in range(seg_start, seg_end + 1):
+                    if i < len(rows):
+                        length += len(rows[i].get('Source', ''))
+                return length
+
             current_seg = raw_segments[0]
+            current_char_count = get_segment_text_len(current_seg['start'], current_seg['end'])
             
             for next_seg in raw_segments[1:]:
-                current_size = current_seg['end'] - current_seg['start'] + 1
-                next_size = next_seg['end'] - next_seg['start'] + 1
+                next_char_count = get_segment_text_len(next_seg['start'], next_seg['end'])
                 
-                # Merge if current is too small AND combined size is safe
-                if (current_size < min_lines) and (current_size + next_size <= max_lines):
+                current_lines = current_seg['end'] - current_seg['start'] + 1
+                next_lines = next_seg['end'] - next_seg['start'] + 1
+                total_lines = current_lines + next_lines
+                total_chars = current_char_count + next_char_count
+                
+                # Merge criteria:
+                # 1. Combined lines must be within MAX_LINES_PER_BATCH
+                # 2. Merge if current batch is "underfilled" (less than TARGET_CHARS)
+                #    OR if the next segment is tiny (e.g. < 50 chars) and fits easily
+                
+                should_merge = False
+                
+                if total_lines <= MAX_LINES_PER_BATCH:
+                    if current_char_count < TARGET_CHARS:
+                        should_merge = True
+                    elif next_char_count < 100: # Always gobble up tiny stragglers if space permits
+                        should_merge = True
+                
+                if should_merge:
                     # Merge next into current
                     current_seg['end'] = next_seg['end']
+                    current_char_count = total_chars
                 else:
                     # Finalize current and move to next
                     merged_segments.append(current_seg)
                     current_seg = next_seg
+                    current_char_count = next_char_count
             
             # Append the last segment
             merged_segments.append(current_seg)
@@ -313,6 +364,13 @@ TEXT:
         glossary_lines = [f"- {k} -> {v}" for k, v in self.glossary.items()]
         glossary_text = "\n".join(glossary_lines) if glossary_lines else "(No glossary provided)"
         
+        style_section = ""
+        if self.style_guide_content:
+            style_section = f"""
+【2.8 STYLE & TONE GUIDELINES (STRICT)】
+{self.style_guide_content}
+"""
+        
         return f"""=== CIL TRANSLATION METHODOLOGY ===
 
 【1. CONTEXT - Document Background】
@@ -326,7 +384,7 @@ The following terminology MUST be used EXACTLY as specified.
 DO NOT use any alternative translations. This is NON-NEGOTIABLE.
 
 {glossary_text}
-
+{style_section}
 【3. LAYMAN'S LOGIC - Feynman Explanation】
 {self.layman_logic or "(Not available)"}
 
@@ -348,9 +406,50 @@ DO NOT use any alternative translations. This is NON-NEGOTIABLE.
                         violations.append(f"{term_en} should be {term_cn}")
         
         if violations:
-            target += f" [[GLOSSARY_VIOLATION: {'; '.join(violations)}]]"
+            target += f" <<<GLOSSARY_VIOLATION: {'; '.join(violations)}>>>"
         
         return target
+
+    def get_external_review_prompt(self) -> str:
+        """
+        Generates a comprehensive system instruction for an external LLM 
+        to review the final exported DOCX against the source DOCX.
+        """
+        glossary_lines = [f"- {k} :: {v}" for k, v in self.glossary.items()]
+        glossary_text = "\n".join(glossary_lines) if glossary_lines else "(No specific glossary provided)"
+        
+        return f"""You are a Senior Legal Translation QA Specialist.
+
+【Task】
+Your task is to review the attached translated document (Simplified Chinese) against the provided original source document (English).
+You must ensure the translation is accurate, legally precise, and strictly adheres to the project's terminology standards.
+
+【Document Context】
+{self.context_note or "General Legal Document"}
+
+【Domain Insights & Critical Constraints】
+{self.domain_insights or "Standard legal terminology applies."}
+
+【Mandatory Glossary】
+A specific glossary file (TSV format) has been provided with this request.
+You must strictly cross-reference this glossary file against the translation.
+Any deviation from the terms defined in the attached glossary is a CRITICAL ERROR.
+
+(Quick Reference - Key Terms):
+{glossary_text}
+
+【Review Guidelines】
+1. **Accuracy**: Verify that all legal obligations, rights, and definitions are translated accurately without ambiguity.
+2. **Consistency**: Ensure the Mandatory Glossary is used consistently throughout the document.
+3. **Style**: The target text must be in professional, formal Simplified Chinese (avoiding "translationese").
+4. **Formatting**: Check that the structure (clause numbering, bolding) matches the source.
+
+【Output Format】
+Please provide a report in the following format:
+- **Critical Issues**: (Glossary violations, missing content, major mistranslations)
+- **Suggestions**: (Stylistic improvements)
+- **Overall Assessment**: (Pass / Needs Revision)
+"""
 
     def process_batch(
         self, 
@@ -403,7 +502,7 @@ The input is a SEMANTICALLY COHERENT SEGMENT.
 3. STRICT ROW ALIGNMENT:
    - You MUST provide a JSON output key for EVERY input index (0 to {len(batch_rows)-1}).
    - No index should be missing.
-   - For lines marked [LOCKED], return "[[LOCKED]]" as the value.
+   - For lines marked [LOCKED], return "<<<LOCKED>>>" as the value.
 
 【Glossary & Logic】
 - Adhere strictly to the Glossary.
@@ -465,10 +564,10 @@ Example:
                     if raw_translation == "[[LOCKED]]":
                         # Should have been handled by is_locked check, but just in case
                          final_translation = row.get('Source')
-                    elif "[[MERGED_UP]]" in raw_translation:
-                        final_translation = "[[已向上合并]]"
-                    elif "[[MERGED_DOWN]]" in raw_translation:
-                        final_translation = "[[已向下合并]]"
+                    elif "[[MERGED_UP]]" in raw_translation: # Still support old format coming from LLM
+                        final_translation = "<<<已向上合并>>>"
+                    elif "[[MERGED_DOWN]]" in raw_translation: # Still support old format coming from LLM
+                        final_translation = "<<<已向下合并>>>"
                     else:
                         clean_translation = raw_translation.replace("，，", "，")
                         final_translation = self._enforce_glossary(row.get('Source', ''), clean_translation)
@@ -484,7 +583,7 @@ Example:
                     processed_batch.append({
                         'ID': row['ID'],
                         'Source': row['Source'],
-                        'Target': "[[MISSING_TRANSLATION]]", # Better to flag than ignore
+                        'Target': "<<<MISSING_TRANSLATION>>>", # Better to flag than ignore
                         'LOCKED': row.get('LOCKED', '0')
                     })
                     
