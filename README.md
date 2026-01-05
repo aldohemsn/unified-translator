@@ -103,19 +103,51 @@ pip install -r requirements.txt
 
 ```
 unified-translator/
-├── main.py              # Main entry point
-├── helper.py            # Interactive helper
-├── config.yaml          # Configuration
-├── core/
-│   ├── llm_client.py    # LLM API client
-│   ├── processor.py     # Batch processor
-│   ├── tsv_handler.py   # TSV I/O
-│   └── context_window.py
-└── strategies/
-    ├── base_strategy.py # Base class
-    ├── legal.py         # Legal strategy
-    ├── academic.py      # Academic strategy
-    └── video.py         # Video strategy
+├── main.py                  # Main entry point
+├── helper.py                # Interactive helper
+├── config.yaml              # Configuration
+├── requirements.txt         # Dependencies
+├── README.md
+│
+├── core/                    # Core modules
+│   ├── llm_client.py        # LLM API client
+│   ├── processor.py         # Batch processor
+│   ├── tsv_handler.py       # TSV I/O
+│   └── context_window.py    # Sliding window builder
+│
+├── strategies/              # Translation strategies
+│   ├── base_strategy.py     # Base class
+│   ├── legal.py             # Legal strategy (CIL)
+│   ├── academic.py          # Academic strategy (Dual-Persona)
+│   └── video.py             # Video strategy (Context-Aware)
+│
+├── docs/                    # 📚 Documentation
+│   ├── METHODOLOGY.md       # Translation methodology whitepaper
+│   ├── SPECIFICATIONS.md    # System specifications
+│   ├── ROADMAP.md           # Development roadmap
+│   ├── MODEL_TOKEN_ANALYSIS.md
+│   ├── VIDEO_TRANSLATION_LOGIC_EXPLAINED.md
+│   └── ACADEMIC_STRATEGY_EXPLAINED.md
+│
+├── scripts/                 # 🔧 Utility scripts
+│   ├── docx/                # DOCX processing tools
+│   │   ├── extract_docx_to_tsv.py
+│   │   ├── extract_glossary_table.py
+│   │   ├── tsv_to_docx.py
+│   │   └── compare_docx.py
+│   ├── qa/                  # Quality assurance tools
+│   │   ├── check_compliance.py
+│   │   └── check_locked.py
+│   ├── apply_client_format.py
+│   └── generate_review_prompt.py
+│
+├── tests/                   # 🧪 Test fixtures
+│   ├── test_academic.tsv
+│   ├── test_legal.tsv
+│   └── test_video.tsv
+│
+└── logs/                    # 📝 Development logs (archived)
+    └── SUMMARY_*.md
 ```
 
 ## 📊 Output
